@@ -504,3 +504,130 @@ fn boundary_under_a_dirty_root_sizes_from_its_content() {
     app.tick();
     assert_eq!(app.world.get::<Transform>(center).unwrap().size, settled);
 }
+
+/// `root(col 400x600) -> [header 40, list (scroll, max-height 320, sized
+/// by its rows), footer 30]`, the list holding `rows` rows of 40.
+fn content_sized_list(app: &mut App, rows: usize) -> (Entity, Entity, Vec<Entity>) {
+    let root = app
+        .world
+        .spawn((
+            Style {
+                flex_direction: FlexDirection::Column,
+                ..px_style(400.0, 600.0)
+            },
+            DirtyLayout,
+        ))
+        .id();
+    app.world
+        .spawn((px_style(400.0, 40.0), ChildOf(root), DirtyLayout));
+    let list = app
+        .world
+        .spawn((
+            Style {
+                flex_direction: FlexDirection::Column,
+                max_height: Length::Px(320.0),
+                overflow_y: Overflow::Scroll,
+                ..Style::default()
+            },
+            RelayoutBoundary,
+            ChildOf(root),
+            DirtyLayout,
+        ))
+        .id();
+    let rows = (0..rows)
+        .map(|_| {
+            app.world
+                .spawn((
+                    Style {
+                        height: Length::Px(40.0),
+                        shrink: 0.0,
+                        ..Style::default()
+                    },
+                    ChildOf(list),
+                    DirtyLayout,
+                ))
+                .id()
+        })
+        .collect();
+    let footer = app
+        .world
+        .spawn((px_style(400.0, 30.0), ChildOf(root), DirtyLayout))
+        .id();
+    (list, footer, rows)
+}
+
+/// #634: a scroll container sized by its content up to a `max-height`
+/// shrinks when its rows go and grows back when they return, and what
+/// follows it moves with it, as in a browser.
+#[test]
+fn content_sized_boundary_follows_its_content() {
+    let mut app = app_with_viewport(800.0, 600.0);
+    let (list, footer, rows) = content_sized_list(&mut app, 11);
+    app.tick();
+    assert_eq!(app.world.get::<Transform>(list).unwrap().size.y, 320.0);
+    assert_eq!(
+        app.world.get::<Transform>(footer).unwrap().absolute.y,
+        360.0
+    );
+
+    // Filter 11 rows down to 5: the list is 200 tall, the footer follows.
+    for row in &rows[5..] {
+        app.world.entity_mut(*row).despawn();
+    }
+    app.world.entity_mut(list).insert(DirtyLayout);
+    app.tick();
+    assert_eq!(app.world.get::<Transform>(list).unwrap().size.y, 200.0);
+    assert_eq!(
+        app.world.get::<Transform>(footer).unwrap().absolute.y,
+        240.0
+    );
+
+    // Two rows back: 280, still under the max.
+    for _ in 0..2 {
+        app.world.spawn((
+            Style {
+                height: Length::Px(40.0),
+                shrink: 0.0,
+                ..Style::default()
+            },
+            ChildOf(list),
+            DirtyLayout,
+        ));
+    }
+    app.tick();
+    assert_eq!(app.world.get::<Transform>(list).unwrap().size.y, 280.0);
+    assert_eq!(
+        app.world.get::<Transform>(footer).unwrap().absolute.y,
+        320.0
+    );
+}
+
+/// #634, the other half: when the content changes but the box cannot (the
+/// list is held at its `max-height`), the boundary is still solved on its
+/// own and nothing above it is laid out again.
+#[test]
+fn content_sized_boundary_at_its_max_solves_alone() {
+    let mut app = app_with_viewport(800.0, 600.0);
+    let (list, footer, rows) = content_sized_list(&mut app, 11);
+    app.tick();
+    let footer_at = app.world.get::<Transform>(footer).unwrap().absolute;
+
+    app.world.entity_mut(rows[10]).despawn();
+    app.world.entity_mut(list).insert(DirtyLayout);
+    app.tick();
+    assert_eq!(app.world.get::<Transform>(list).unwrap().size.y, 320.0);
+    assert_eq!(
+        app.world.get::<Transform>(footer).unwrap().absolute,
+        footer_at
+    );
+    let layout = app.world.get_non_send::<LayoutResource>().unwrap();
+    // The solve sizes and places the list and each of its ten rows, and
+    // asking the list for its size adds one visit; the root is never one
+    // of them.
+    assert_eq!(layout.solves_last_sync(), 1);
+    assert!(
+        layout.visits_last_sync() <= 1 + 2 * 10 + 1,
+        "the root was solved again: {} visits",
+        layout.visits_last_sync()
+    );
+}

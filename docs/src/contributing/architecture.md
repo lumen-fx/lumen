@@ -860,7 +860,11 @@ nearest relayout boundary; taffy computes the tree from each topmost dirty
 element with a measure function that calls the text shaper for intrinsic sizes;
 and the results are written back as absolute coordinates. A dirty boundary
 with a dirty ancestor lays out in that ancestor's solve; only a boundary whose
-ancestors are all clean solves on its own, in the box it had before. The taffy tree is a non-send resource, because taffy's
+ancestors are all clean solves on its own, in the box it had before. A boundary
+sized by its own content on an axis (a scroll list growing to a `max-height`)
+is first asked for the size its content gives it, and when that differs from
+the box it has, the next boundary up solves instead, so its parent places it
+again. The taffy tree is a non-send resource, because taffy's
 compact length representation stores a raw pointer and is neither `Send` nor
 `Sync`.
 

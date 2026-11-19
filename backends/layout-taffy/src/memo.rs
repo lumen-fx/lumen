@@ -180,6 +180,37 @@ where
     view.visits
 }
 
+/// The size `node` takes for `inputs`, asked the way a parent asks a child
+/// for its size: nothing below it is placed and no geometry is written.
+/// Returns the size and the number of nodes computed.
+pub fn measure_node<C, M>(
+    tree: &mut TaffyTree<C>,
+    geometry: &mut Geometry,
+    node: NodeId,
+    inputs: LayoutInput,
+    measure: M,
+) -> (taffy::Size<f32>, usize)
+where
+    C: Copy,
+    M: FnMut(
+        taffy::Size<Option<f32>>,
+        taffy::Size<AvailableSpace>,
+        NodeId,
+        Option<C>,
+        &Style,
+    ) -> taffy::Size<f32>,
+{
+    let mut view = View {
+        tree,
+        geometry,
+        measure,
+        memo: HashMap::new(),
+        visits: 0,
+    };
+    let output = view.compute(node, inputs, None);
+    (output.size, view.visits)
+}
+
 /// One solve in progress: taffy's tree plus the memo and the geometry it
 /// writes into.
 struct View<'a, C, M> {

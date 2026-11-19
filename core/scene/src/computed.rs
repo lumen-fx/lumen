@@ -869,8 +869,10 @@ fn scrollbar_style(attrs: &Attributes) -> Option<ScrollbarStyle> {
 /// Layout may stop its dirty walk at this element:
 ///
 /// 1. the markup asked for it with `layout-boundary`;
-/// 2. it is a scroll container, whose content size never feeds back into
-///    its own box beyond what the already-known clip box allows;
+/// 2. it is a scroll container, whose content usually changes only what
+///    scrolls inside its box; one sized by its content on an axis is asked
+///    for its size before it solves alone, and its parent lays it out again
+///    when that size moved (the layout backend's `sync_layout`);
 /// 3. both `width` and `height` are fixed `Px` and the element cannot be
 ///    flex-shrunk (`shrink: 0`) - its size is then constraint-imposed, so
 ///    descendants can re-flow internally without changing the parent's

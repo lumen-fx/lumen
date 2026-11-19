@@ -830,7 +830,7 @@ pub fn sync_layout(
     // solve against their own window's viewport.
     // An element whose text sits in an anonymous box gets the box's
     // geometry here.
-    (overlay_q, surface_q, viewport_q, mut anon_box_q, partitions): PlacementQueries,
+    (overlay_q, surface_q, viewport_q, mut anon_box_q, partitions, boundary_q): PlacementQueries,
 ) {
     // Idle-tick fast path: with no dirty entities there is no relayout to
     // do, so we also skip the map/tree bookkeeping below. Entity despawns
@@ -988,7 +988,7 @@ pub fn sync_layout(
     // it had the tick before, over the root's intrinsic sizing and position.
     // A surface root is always a root: it lays out in its own window, and
     // the walk stops there.
-    let dirty_roots: Vec<Entity> = dirty_q
+    let mut dirty_roots: Vec<Entity> = dirty_q
         .iter()
         .filter(|&e| {
             if surface_q.contains(e) {
@@ -1013,8 +1013,9 @@ pub fn sync_layout(
     }
 
     // D1: a dirty root that has a (clean) parent is a RelayoutBoundary
-    // subtree recompute. Its size is constraint-imposed - that's what
-    // made it a boundary - so the recompute must be solved against the
+    // subtree recompute. Its size is constraint-imposed (one sized by its
+    // content is checked below, before the solve), so the recompute must
+    // be solved against the
     // box the parent last gave it, not the viewport, and its own
     // absolute position must not move (only descendants get new
     // geometry). Pin the taffy root style to the prior `Transform.size`
@@ -1024,11 +1025,6 @@ pub fn sync_layout(
     // style is restored after the solve. Boundaries whose *own* Style
     // changed never land here: `react_to_style_changes` pierces the
     // boundary by dirtying its parent, so the dirty root moves above.
-    struct SubtreePin {
-        prior_absolute: Vec2,
-        available: taffy::Size<AvailableSpace>,
-        original_style: taffy::Style,
-    }
     let mut pins: HashMap<Entity, SubtreePin> = HashMap::new();
     for root in &dirty_roots {
         if parent_q.get(*root).is_err() || surface_q.contains(*root) {
@@ -1036,33 +1032,12 @@ pub fn sync_layout(
         }
         // No prior geometry (first layout of a freshly-spawned subtree
         // root) -> fall back to the legacy viewport-based solve.
-        let Ok(prior) = transform_q.get(*root) else {
+        let (Ok(prior), Some(&node)) = (transform_q.get(*root), layout.map.get(root)) else {
             continue;
         };
-        let (prior_absolute, prior_size) = (prior.absolute, prior.size);
-        let Some(&node) = layout.map.get(root) else {
-            continue;
-        };
-        let Ok(original_style) = layout.tree.style(node).cloned() else {
-            continue;
-        };
-        let mut pinned = original_style.clone();
-        pinned.size = taffy::Size {
-            width: taffy::style::Dimension::length(prior_size.x),
-            height: taffy::style::Dimension::length(prior_size.y),
-        };
-        let _ = layout.tree.set_style(node, pinned);
-        pins.insert(
-            *root,
-            SubtreePin {
-                prior_absolute,
-                available: taffy::Size {
-                    width: AvailableSpace::Definite(prior_size.x),
-                    height: AvailableSpace::Definite(prior_size.y),
-                },
-                original_style,
-            },
-        );
+        if let Some(pin) = SubtreePin::pin(&mut layout.tree, node, prior) {
+            pins.insert(*root, pin);
+        }
     }
 
     // Snapshot every entity's measure input before the solve starts. The
@@ -1237,6 +1212,223 @@ pub fn sync_layout(
     let memo: &mut TextMeasureMemo = &mut memo;
     let tree: &mut TaffyTree<NodeContext> = &mut layout.tree;
     let geometry: &mut Geometry = &mut layout.geometry;
+    let mut measure = |known: taffy::Size<Option<f32>>,
+                       available: taffy::Size<AvailableSpace>,
+                       _node_id: NodeId,
+                       ctx: Option<NodeContext>,
+                       _style: &taffy::Style| {
+        // taffy hands us the parent-resolved dimensions
+        // first; honour them when present so a fixed-size
+        // container always wins over intrinsic size.
+        if let (Some(w), Some(h)) = (known.width, known.height) {
+            return taffy::Size {
+                width: w,
+                height: h,
+            };
+        }
+        match ctx.as_ref() {
+            Some(NodeContext::Text(entity)) => match measure_inputs.get(entity) {
+                Some(MeasureInput::Text(t)) => {
+                    // Wrap at the content box. `known.width` is
+                    // the border box, padding and border
+                    // included; taffy hands the content width
+                    // it leaves as the definite available
+                    // width whenever a width is known.
+                    let content_width = match available.width {
+                        AvailableSpace::Definite(w) => Some(w),
+                        _ => known.width,
+                    };
+                    let max_width = known.width.and(content_width).or(t.max_width);
+                    // Lazy path: a scroll-contained, word-wrapped
+                    // paragraph outside the visible band (see the
+                    // `lazy_text` set below) gets a cheap height
+                    // estimate - or its memoised exact height if
+                    // it has been shaped before - instead of a
+                    // full shape. Visible text, and
+                    // any text without a definite wrap width,
+                    // always take the exact path, so on-screen
+                    // output is byte-for-byte unchanged.
+                    if t.wrap != WrapMode::None
+                        && let Some(&lazy_w) = lazy_text.get(entity)
+                    {
+                        // Prefer taffy's resolved width when it
+                        // gives one; else the pre-pass wrap width
+                        // (so the intrinsic passes skip shaping
+                        // too).
+                        // Deliberately not wired to `t.line_height`: this
+                        // estimate only ever backs an off-screen / not-yet-
+                        // shaped paragraph's provisional height, and the memo
+                        // it first checks is itself keyed on (text, width)
+                        // only, not line-height - so threading a CSS override
+                        // through just this literal would still go stale the
+                        // moment the entity scrolls into view and re-memoises.
+                        // The exact path below (taken once the paragraph is
+                        // visible) already carries the real `line_height`.
+                        let w = max_width.unwrap_or(lazy_w);
+                        let h = memo
+                            .get(*entity, &t.text, w)
+                            .unwrap_or_else(|| estimate_wrapped_height(&t.text, t.size_px, w));
+                        measured_baselines.insert(*entity, (t.size_px * 1.2 * 0.8).max(0.0));
+                        return taffy::Size {
+                            width: known.width.unwrap_or(w),
+                            height: known.height.unwrap_or(h),
+                        };
+                    }
+                    let line_h = resolve_line_height(t.line_height, t.size_px);
+                    let opts = ShapeOptions {
+                        width: max_width,
+                        wrap: t.wrap,
+                        max_lines: t.max_lines,
+                        family: t.family.clone(),
+                        weight: t.weight,
+                        line_height: Some(line_h),
+                    };
+                    // A min-content probe with no width of its
+                    // own (taffy sizing a flex item's automatic
+                    // minimum, a min-content track, ...) gets
+                    // the longest word, as CSS does; a wrapping
+                    // label in a crowded row then shrinks and
+                    // wraps instead of keeping its one-line
+                    // width.
+                    let min_content = known.width.is_none()
+                        && matches!(available.width, AvailableSpace::MinContent)
+                        && t.wrap != WrapMode::None;
+                    let (w, h, baseline) = if min_content {
+                        shaper.measure_min_content(&t.text, t.size_px, &opts)
+                    } else {
+                        shaper.measure_with_baseline(&t.text, t.size_px, &opts)
+                    };
+                    // Remember the exact height so that once this
+                    // paragraph scrolls back out of view the lazy
+                    // path returns the real value - the extent
+                    // only ever refines, never snaps shorter.
+                    if let Some(mw) = max_width.filter(|_| !min_content) {
+                        memo.record(*entity, &t.text, mw, h);
+                    }
+                    measured_baselines.insert(*entity, baseline);
+                    taffy::Size {
+                        width: known.width.unwrap_or(w),
+                        height: known.height.unwrap_or(h),
+                    }
+                }
+                _ => fallback_size(known),
+            },
+            Some(NodeContext::Image(entity)) => match measure_inputs.get(entity) {
+                Some(MeasureInput::Image { natural }) => taffy::Size {
+                    width: known.width.unwrap_or(natural.x),
+                    height: known.height.unwrap_or(natural.y),
+                },
+                _ => fallback_size(known),
+            },
+            _ => fallback_size(known),
+        }
+    };
+
+    // #634: a boundary sized by its own content (a scroll list growing to
+    // a `max-height`) is not constraint-sized, so the box its parent gave
+    // it last tick may no longer be the box it takes. Ask it for its size
+    // the way its parent would; when that differs from the box it has,
+    // solve from the next boundary up instead, so the parent places it.
+    // A boundary whose box stays put is solved alone, as before.
+    let mut pending: Vec<Entity> = dirty_roots
+        .iter()
+        .copied()
+        .filter(|r| pins.contains_key(r))
+        .collect();
+    while let Some(root) = pending.pop() {
+        let (Some(pin), Some(&node)) = (pins.get(&root), layout.map.get(&root)) else {
+            continue;
+        };
+        let Some(parent) = parent_q.get(root).ok().map(|c| c.parent()) else {
+            continue;
+        };
+        let Some(&parent_node) = layout.map.get(&parent) else {
+            continue;
+        };
+        let Ok(parent_style) = tree.style(parent_node) else {
+            continue;
+        };
+        let axes = content_sized_axes(&pin.original_style, parent_style);
+        if !axes.width && !axes.height {
+            continue;
+        }
+        let prior = pin.prior_size();
+        let inner = content_box(&geometry.get(parent_node).unwrap_or_default());
+        let pinned = tree.style(node).ok().cloned();
+        let _ = tree.set_style(node, pin.original_style.clone());
+        let (wanted, visits) = memo::measure_node(
+            tree,
+            geometry,
+            node,
+            taffy::LayoutInput {
+                run_mode: taffy::RunMode::ComputeSize,
+                sizing_mode: taffy::SizingMode::InherentSize,
+                axis: taffy::RequestedAxis::Both,
+                known_dimensions: taffy::Size {
+                    width: (!axes.width).then_some(prior.x),
+                    height: (!axes.height).then_some(prior.y),
+                },
+                parent_size: taffy::Size {
+                    width: Some(inner.x),
+                    height: Some(inner.y),
+                },
+                available_space: taffy::Size {
+                    width: AvailableSpace::Definite(inner.x),
+                    height: AvailableSpace::Definite(inner.y),
+                },
+                vertical_margins_are_collapsible: taffy::Line::FALSE,
+            },
+            &mut measure,
+        );
+        layout.visits_last_sync += visits;
+        let moved = (axes.width && (wanted.width - prior.x).abs() > 0.5)
+            || (axes.height && (wanted.height - prior.y).abs() > 0.5);
+        if !moved {
+            if let Some(pinned) = pinned {
+                let _ = tree.set_style(node, pinned);
+            }
+            continue;
+        }
+        // The next boundary up, or the top of the tree, solves instead.
+        let mut above = parent;
+        while !boundary_q.contains(above) && !surface_q.contains(above) {
+            match parent_q.get(above) {
+                Ok(c) => above = c.parent(),
+                Err(_) => break,
+            }
+        }
+        let inside = |e: Entity| {
+            let mut cur = e;
+            loop {
+                if cur == above {
+                    return true;
+                }
+                match parent_q.get(cur) {
+                    Ok(c) if !surface_q.contains(cur) => cur = c.parent(),
+                    _ => return false,
+                }
+            }
+        };
+        dirty_roots.retain(|&r| {
+            if !inside(r) {
+                return true;
+            }
+            if let (Some(pin), Some(&n)) = (pins.remove(&r), layout.map.get(&r)) {
+                let _ = tree.set_style(n, pin.original_style);
+            }
+            false
+        });
+        dirty_roots.push(above);
+        if parent_q.get(above).is_ok()
+            && !surface_q.contains(above)
+            && let (Ok(prior), Some(&n)) = (transform_q.get(above), layout.map.get(&above))
+            && let Some(pin) = SubtreePin::pin(tree, n, prior)
+        {
+            pins.insert(above, pin);
+            pending.push(above);
+        }
+    }
+
     for root in &dirty_roots {
         // Boundary subtree recomputes solve against the boundary's
         // prior box; true roots solve against the viewport, minus the
@@ -1257,124 +1449,8 @@ pub fn sync_layout(
             .copied();
         if let Some(node) = node {
             layout.solves_last_sync += 1;
-            layout.visits_last_sync += compute_layout_memoised(
-                tree,
-                geometry,
-                node,
-                available,
-                |known: taffy::Size<Option<f32>>,
-                 available: taffy::Size<AvailableSpace>,
-                 _node_id: NodeId,
-                 ctx: Option<NodeContext>,
-                 _style: &taffy::Style| {
-                    // taffy hands us the parent-resolved dimensions
-                    // first; honour them when present so a fixed-size
-                    // container always wins over intrinsic size.
-                    if let (Some(w), Some(h)) = (known.width, known.height) {
-                        return taffy::Size {
-                            width: w,
-                            height: h,
-                        };
-                    }
-                    match ctx.as_ref() {
-                        Some(NodeContext::Text(entity)) => match measure_inputs.get(entity) {
-                            Some(MeasureInput::Text(t)) => {
-                                // Wrap at the content box. `known.width` is
-                                // the border box, padding and border
-                                // included; taffy hands the content width
-                                // it leaves as the definite available
-                                // width whenever a width is known.
-                                let content_width = match available.width {
-                                    AvailableSpace::Definite(w) => Some(w),
-                                    _ => known.width,
-                                };
-                                let max_width = known.width.and(content_width).or(t.max_width);
-                                // Lazy path: a scroll-contained, word-wrapped
-                                // paragraph outside the visible band (see the
-                                // `lazy_text` set below) gets a cheap height
-                                // estimate - or its memoised exact height if
-                                // it has been shaped before - instead of a
-                                // full shape. Visible text, and
-                                // any text without a definite wrap width,
-                                // always take the exact path, so on-screen
-                                // output is byte-for-byte unchanged.
-                                if t.wrap != WrapMode::None
-                                    && let Some(&lazy_w) = lazy_text.get(entity)
-                                {
-                                    // Prefer taffy's resolved width when it
-                                    // gives one; else the pre-pass wrap width
-                                    // (so the intrinsic passes skip shaping
-                                    // too).
-                                    // Deliberately not wired to `t.line_height`: this
-                                    // estimate only ever backs an off-screen / not-yet-
-                                    // shaped paragraph's provisional height, and the memo
-                                    // it first checks is itself keyed on (text, width)
-                                    // only, not line-height - so threading a CSS override
-                                    // through just this literal would still go stale the
-                                    // moment the entity scrolls into view and re-memoises.
-                                    // The exact path below (taken once the paragraph is
-                                    // visible) already carries the real `line_height`.
-                                    let w = max_width.unwrap_or(lazy_w);
-                                    let h = memo.get(*entity, &t.text, w).unwrap_or_else(|| {
-                                        estimate_wrapped_height(&t.text, t.size_px, w)
-                                    });
-                                    measured_baselines
-                                        .insert(*entity, (t.size_px * 1.2 * 0.8).max(0.0));
-                                    return taffy::Size {
-                                        width: known.width.unwrap_or(w),
-                                        height: known.height.unwrap_or(h),
-                                    };
-                                }
-                                let line_h = resolve_line_height(t.line_height, t.size_px);
-                                let opts = ShapeOptions {
-                                    width: max_width,
-                                    wrap: t.wrap,
-                                    max_lines: t.max_lines,
-                                    family: t.family.clone(),
-                                    weight: t.weight,
-                                    line_height: Some(line_h),
-                                };
-                                // A min-content probe with no width of its
-                                // own (taffy sizing a flex item's automatic
-                                // minimum, a min-content track, ...) gets
-                                // the longest word, as CSS does; a wrapping
-                                // label in a crowded row then shrinks and
-                                // wraps instead of keeping its one-line
-                                // width.
-                                let min_content = known.width.is_none()
-                                    && matches!(available.width, AvailableSpace::MinContent)
-                                    && t.wrap != WrapMode::None;
-                                let (w, h, baseline) = if min_content {
-                                    shaper.measure_min_content(&t.text, t.size_px, &opts)
-                                } else {
-                                    shaper.measure_with_baseline(&t.text, t.size_px, &opts)
-                                };
-                                // Remember the exact height so that once this
-                                // paragraph scrolls back out of view the lazy
-                                // path returns the real value - the extent
-                                // only ever refines, never snaps shorter.
-                                if let Some(mw) = max_width.filter(|_| !min_content) {
-                                    memo.record(*entity, &t.text, mw, h);
-                                }
-                                measured_baselines.insert(*entity, baseline);
-                                taffy::Size {
-                                    width: known.width.unwrap_or(w),
-                                    height: known.height.unwrap_or(h),
-                                }
-                            }
-                            _ => fallback_size(known),
-                        },
-                        Some(NodeContext::Image(entity)) => match measure_inputs.get(entity) {
-                            Some(MeasureInput::Image { natural }) => taffy::Size {
-                                width: known.width.unwrap_or(natural.x),
-                                height: known.height.unwrap_or(natural.y),
-                            },
-                            _ => fallback_size(known),
-                        },
-                        _ => fallback_size(known),
-                    }
-                },
-            );
+            layout.visits_last_sync +=
+                compute_layout_memoised(tree, geometry, node, available, &mut measure);
         }
     }
 
@@ -1618,6 +1694,7 @@ type PlacementQueries<'w, 's> = (
     Query<'w, 's, &'static WindowViewport>,
     Query<'w, 's, &'static mut AnonymousTextBox>,
     Option<Res<'w, WindowPartitions>>,
+    Query<'w, 's, (), With<RelayoutBoundary>>,
 );
 
 /// An element's text and text style, with what decides whether that text
@@ -1724,6 +1801,122 @@ fn fallback_size(known: taffy::Size<Option<f32>>) -> taffy::Size<f32> {
     taffy::Size {
         width: known.width.unwrap_or(0.0),
         height: known.height.unwrap_or(0.0),
+    }
+}
+
+/// A relayout boundary solved on its own: the taffy root style is pinned
+/// to the box its parent last gave it, and the solve leaves its absolute
+/// position where it was. See [`sync_layout`].
+struct SubtreePin {
+    prior_absolute: Vec2,
+    available: taffy::Size<AvailableSpace>,
+    original_style: taffy::Style,
+}
+
+impl SubtreePin {
+    /// Pin `node` to `prior`'s size, remembering its own style for the
+    /// restore after the solve.
+    fn pin(tree: &mut TaffyTree<NodeContext>, node: NodeId, prior: &Transform) -> Option<Self> {
+        let original_style = tree.style(node).ok()?.clone();
+        let mut pinned = original_style.clone();
+        pinned.size = taffy::Size {
+            width: taffy::style::Dimension::length(prior.size.x),
+            height: taffy::style::Dimension::length(prior.size.y),
+        };
+        let _ = tree.set_style(node, pinned);
+        Some(Self {
+            prior_absolute: prior.absolute,
+            available: taffy::Size {
+                width: AvailableSpace::Definite(prior.size.x),
+                height: AvailableSpace::Definite(prior.size.y),
+            },
+            original_style,
+        })
+    }
+
+    /// The box the boundary had before this solve.
+    fn prior_size(&self) -> Vec2 {
+        Vec2::new(
+            definite_or_zero_axis(self.available.width),
+            definite_or_zero_axis(self.available.height),
+        )
+    }
+}
+
+/// The size of a laid-out box inside its padding and border: what its
+/// children's percentages resolve against.
+fn content_box(layout: &taffy::Layout) -> Vec2 {
+    Vec2::new(
+        layout.size.width
+            - layout.padding.left
+            - layout.padding.right
+            - layout.border.left
+            - layout.border.right,
+        layout.size.height
+            - layout.padding.top
+            - layout.padding.bottom
+            - layout.border.top
+            - layout.border.bottom,
+    )
+    .max(Vec2::ZERO)
+}
+
+/// The axes on which a relayout boundary takes its size from its own
+/// content rather than from its parent (#634): its size on the axis is
+/// `auto`, and the parent neither stretches it across that axis nor grows
+/// it along it. A scroll container sized by its rows up to a
+/// `max-height` is one; a `grow: 1` scroll in a fixed column is not.
+fn content_sized_axes(style: &taffy::Style, parent: &taffy::Style) -> taffy::Size<bool> {
+    let auto = taffy::Size {
+        width: style.size.width.is_auto(),
+        height: style.size.height.is_auto(),
+    };
+    if style.position == taffy::Position::Absolute {
+        // Pinned on an axis only by insets on both of its sides.
+        return taffy::Size {
+            width: auto.width && (style.inset.left.is_auto() || style.inset.right.is_auto()),
+            height: auto.height && (style.inset.top.is_auto() || style.inset.bottom.is_auto()),
+        };
+    }
+    let stretched = |align: Option<taffy::style::AlignItems>| {
+        align.is_none_or(|a| a.keyword() == taffy::style::AlignItemsKeyword::Stretch)
+    };
+    match parent.display {
+        Display::Flex => {
+            let row = matches!(
+                parent.flex_direction,
+                taffy::style::FlexDirection::Row | taffy::style::FlexDirection::RowReverse
+            );
+            let grown = style.flex_grow > 0.0 || !style.flex_basis.is_auto();
+            // A wrapping container sizes each line by its items.
+            let cross_stretched = parent.flex_wrap == taffy::style::FlexWrap::NoWrap
+                && stretched(style.align_self.or(parent.align_items));
+            let (main, cross) = (!grown, !cross_stretched);
+            taffy::Size {
+                width: auto.width && if row { main } else { cross },
+                height: auto.height && if row { cross } else { main },
+            }
+        }
+        Display::Grid => taffy::Size {
+            width: auto.width && !stretched(style.justify_self.or(parent.justify_items)),
+            height: auto.height && !stretched(style.align_self.or(parent.align_items)),
+        },
+        // A block fills its container's width and takes its content's height.
+        Display::Block | Display::FlowRoot => taffy::Size {
+            width: false,
+            height: auto.height,
+        },
+        Display::None => taffy::Size {
+            width: false,
+            height: false,
+        },
+    }
+}
+
+fn definite_or_zero_axis(space: AvailableSpace) -> f32 {
+    match space {
+        AvailableSpace::Definite(v) => v,
+        _ => 0.0,
     }
 }
 
