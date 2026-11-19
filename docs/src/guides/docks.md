@@ -264,7 +264,7 @@ Every arrangement has a keyboard path:
 | Shift+Space on a tab | Maximize its panel to fill the dock, or give the dock its layout back. |
 | Escape | Cancel a drag in progress, slide a pinned panel back in, or give a maximized dock its layout back. |
 | Delete on a tab | Close its panel. |
-| Menu key, Shift+F10 on a tab | Open its tab menu: move the panel to a new window, dock it back, maximize it, close it. |
+| Menu key, Shift+F10 on a tab | Open its tab menu: move the panel to a new window, dock it back, maximize it, collapse or expand its stack, close it. |
 
 The module's `keys` config rebinds any of them, or turns them off.
 

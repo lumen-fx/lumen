@@ -42,6 +42,10 @@ pub enum MenuAction {
     Maximize,
     /// Give the dock its whole layout back.
     Restore,
+    /// Fold the panel's stack to its tab strip.
+    Collapse,
+    /// Unfold a collapsed stack.
+    Expand,
     /// Close the panel, asking its `panelclose` handlers first.
     Close,
 }
@@ -57,6 +61,8 @@ impl MenuAction {
             MenuAction::Pin => "lumen-dock-pin",
             MenuAction::Maximize => "lumen-dock-maximize",
             MenuAction::Restore => "lumen-dock-restore",
+            MenuAction::Collapse => "lumen-dock-collapse",
+            MenuAction::Expand => "lumen-dock-expand",
             MenuAction::Close => "lumen-dock-close-panel",
         }
     }
@@ -74,6 +80,8 @@ impl MenuAction {
             MenuAction::Pin => ("lumen-dock-pin", "Pin to sidebar"),
             MenuAction::Maximize => ("lumen-dock-maximize", "Maximize"),
             MenuAction::Restore => ("lumen-dock-restore", "Restore layout"),
+            MenuAction::Collapse => ("lumen-dock-collapse", "Collapse"),
+            MenuAction::Expand => ("lumen-dock-expand", "Expand"),
             MenuAction::Close => ("lumen-dock-close", "Close"),
         }
     }
@@ -84,7 +92,7 @@ impl MenuAction {
         crate::plugin::text(key, fallback)
     }
 
-    const ALL: [MenuAction; 8] = [
+    const ALL: [MenuAction; 10] = [
         MenuAction::Detach,
         MenuAction::DetachGroup,
         MenuAction::Attach,
@@ -92,6 +100,8 @@ impl MenuAction {
         MenuAction::Pin,
         MenuAction::Maximize,
         MenuAction::Restore,
+        MenuAction::Collapse,
+        MenuAction::Expand,
         MenuAction::Close,
     ];
 
@@ -171,6 +181,20 @@ pub fn actions_for(shared: &Shared, panel: &str) -> Vec<MenuAction> {
             } else {
                 MenuAction::Maximize
             });
+            // A maximized stack fills the dock; folding it would leave the
+            // dock empty.
+            if maximized != Some(panel) {
+                let collapsed = core
+                    .ws
+                    .find(panel)
+                    .and_then(|loc| core.ws.stack(&loc.stack))
+                    .is_some_and(|s| s.collapsed);
+                out.push(if collapsed {
+                    MenuAction::Expand
+                } else {
+                    MenuAction::Collapse
+                });
+            }
         }
         Where::Float(_) => {
             out.push(MenuAction::Detach);

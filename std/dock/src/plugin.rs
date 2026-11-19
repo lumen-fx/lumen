@@ -551,6 +551,8 @@ fn menu_action(
         MenuAction::DetachGroup => core.op_detach_group(panel, Reason::User),
         MenuAction::Attach => core.op_attach(panel, Reason::User),
         MenuAction::Maximize => core.op_maximize(panel, Reason::User),
+        MenuAction::Collapse => core.op_collapse(panel, true, Reason::User),
+        MenuAction::Expand => core.op_collapse(panel, false, Reason::User),
         MenuAction::Restore => {
             if let Where::Dock(d) = core.ws.where_is(panel) {
                 core.op_restore_maximized(&d, Reason::User);

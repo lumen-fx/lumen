@@ -13,6 +13,8 @@ lumen-dock-float = Float
 lumen-dock-pin = Pin to sidebar
 lumen-dock-maximize = Maximize
 lumen-dock-restore = Restore layout
+lumen-dock-collapse = Collapse
+lumen-dock-expand = Expand
 
 # What a screen reader hears after a panel moves, after the panel's title.
 lumen-dock-moved-to-window = moved to a new window
