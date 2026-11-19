@@ -580,8 +580,9 @@ the lock rather than with permissions it did not choose.
 
 ### Dragging inside the app
 
-In-app drags work in a desktop app only: they do not reach a web page yet
-(see [the web target's limits](web.md#known-limits)).
+In-app drags work in a desktop app and on a web page, where the browser runs
+the drag (see [the web target's limits](web.md#known-limits) for what a page
+does differently).
 
 Give the source a payload and the destination a drop target:
 

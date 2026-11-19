@@ -20,7 +20,7 @@
 use lumen_core::components::LayoutDirection;
 use lumen_ir::layout_ir::Attributes;
 
-use crate::contract::{DATA_LM_CHECKED, DATA_LM_DISABLED};
+use crate::contract::{DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_DRAG, DATA_LM_DRAG_TYPE};
 use crate::style::{Emission, WebDecl, rewrite_property};
 use crate::tags::{html_tag_for, lm_class};
 
@@ -243,7 +243,25 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if attrs.autofocus && (name == "button" || name == "input" || name == "textarea") {
         out.push(("autofocus", String::new()));
     }
-    if attrs.draggable {
+    // An in-app drag source is one the browser drags: `draggable`, with the
+    // payload and its kind beside it. An empty payload is the element's id,
+    // as on the desktop.
+    if let Some(payload) = &attrs.drag_payload {
+        let text = if payload.is_empty() {
+            attrs.id.clone().unwrap_or_default()
+        } else {
+            payload.clone()
+        };
+        out.push(("draggable", "true".to_string()));
+        out.push((DATA_LM_DRAG, text));
+        out.push((
+            DATA_LM_DRAG_TYPE,
+            attrs
+                .drag_type
+                .clone()
+                .unwrap_or_else(|| "text/plain".into()),
+        ));
+    } else if attrs.draggable {
         out.push(("draggable", "true".to_string()));
     }
     match attrs.dir {
@@ -605,6 +623,19 @@ mod tests {
     fn an_element_styled_only_by_css_declares_nothing_of_its_own() {
         assert!(markup_rules(&attrs()).is_empty());
         assert_eq!(find(&html_attrs("tile", &attrs()), "style"), None);
+    }
+
+    /// A drag source is draggable and names its payload and kind.
+    #[test]
+    fn a_drag_source_says_so() {
+        let mut a = attrs();
+        a.id = Some("card-3".into());
+        a.drag_payload = Some(String::new());
+        a.drag_type = Some("application/x-card".into());
+        let source = html_attrs("tile", &a);
+        assert_eq!(find(&source, "draggable"), Some("true"));
+        assert_eq!(find(&source, DATA_LM_DRAG), Some("card-3"));
+        assert_eq!(find(&source, DATA_LM_DRAG_TYPE), Some("application/x-card"));
     }
 
     #[test]

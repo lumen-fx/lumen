@@ -153,7 +153,8 @@ fn install_dom_events(app: &mut App) {
     app.world.init_resource::<EventHosts>();
     // The drag events follow this tick's pointer events, read after the drag
     // session wrote them, so a `dragstart` handler's `set_data` reaches the
-    // session before the drag next moves. A page has no in-app drag session.
+    // session before the drag next moves. On a page the browser runs the
+    // drag, and the page's listeners queue its events themselves.
     #[cfg(not(target_arch = "wasm32"))]
     let queue = (
         queue_pointer_and_key_events,

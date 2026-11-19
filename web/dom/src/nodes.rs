@@ -175,6 +175,7 @@ type NodeQuery<'w, 's> = Query<
         Option<&'static InlineStyle>,
         Option<&'static Anchor>,
         Option<&'static RadioButton>,
+        Has<lumen_os_dnd::DragSource>,
     ),
 >;
 
@@ -521,7 +522,7 @@ fn build(
     scene: &Scene<'_, '_, '_>,
 ) -> Option<Element> {
     let routes = scene.routes;
-    let (tag, id, classes, text, attributes, style, anchor, radio) =
+    let (tag, id, classes, text, attributes, style, anchor, radio, drag_source) =
         scene.nodes.get(entity).ok()?;
     let foreign = scene.foreign.and_then(|f| f.get(&tag.0));
     let html = match (html_tag_for(&tag.0), foreign) {
@@ -565,6 +566,11 @@ fn build(
     }
     if let Some(style) = style {
         let _ = element.set_attribute("style", &style_value(&style.0));
+    }
+    // An in-app drag source is one the browser drags. Its payload is read
+    // off the entity when the drag starts.
+    if drag_source {
+        let _ = element.set_attribute("draggable", "true");
     }
     // The control the browser draws the element with, ahead of everything
     // else inside it, which is where the emitter writes it. What it shows is

@@ -772,7 +772,7 @@ fn register_runtime_state<S: HostFnSink>(engine: &mut S) {
             ins::node_matched_rules(handle)
                 .into_iter()
                 .map(|rule| {
-                    Value::Map(std::collections::BTreeMap::from([
+                    Value::Map(candela_map([
                         ("selector".to_owned(), Value::String(rule.selector)),
                         (
                             "specificity".to_owned(),

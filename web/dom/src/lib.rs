@@ -160,6 +160,11 @@ impl Plugin for WebDomPlugin {
         // A dialog the browser dismisses writes the signal it hangs off, so
         // the store has to be there before the first event is drained.
         app.world.init_resource::<PropertyStore>();
+        // The browser runs an in-app drag; the page keeps the session the
+        // desktop's drag plugin keeps and queues the same DOM events.
+        app.world.init_resource::<lumen_os_dnd::ActiveDrag>();
+        app.world.init_resource::<lumen_script::PendingDomEvents>();
+        lumen_script::register_dom_event_messages(&mut app.world);
 
         // Reading the browser comes first, so a click this frame is a message
         // the app's own systems see this frame. After the message-buffer
@@ -195,6 +200,7 @@ impl Plugin for WebDomPlugin {
             TickStage::A11ySync,
             (
                 nodes::bind_new_nodes,
+                events::publish_drag,
                 nodes::release_dead_nodes,
                 project::project_text,
                 project::project_classes,
