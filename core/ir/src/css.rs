@@ -3717,6 +3717,14 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "border-bottom-left-radius",
     "padding",
     "margin",
+    "padding-top",
+    "padding-right",
+    "padding-bottom",
+    "padding-left",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
     "text-color",
     "selection-color",
     "caret-color",
@@ -3792,6 +3800,10 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "text-overflow",
     "position",
     "inset",
+    "top",
+    "right",
+    "bottom",
+    "left",
     "min-width",
     "min-height",
     "max-width",
@@ -3933,6 +3945,38 @@ fn border_shorthand_to_paint(
     }
 }
 
+/// Write one physical side (`top`, `right`, `bottom`, `left`) of an
+/// edge set: its px value and its percentage, as [`parse_edges`] writes a
+/// side. The block-axis logical field naming the same side is cleared, so
+/// the later declaration wins as it does in CSS.
+fn set_physical_side(
+    edges: &mut crate::layout_ir::Edges,
+    side: &str,
+    (px, pct): (f32, Option<f32>),
+) {
+    match side {
+        "top" => {
+            edges.top = px;
+            edges.pct_top = pct;
+            edges.block_start = None;
+        }
+        "right" => {
+            edges.right = px;
+            edges.pct_right = pct;
+        }
+        "bottom" => {
+            edges.bottom = px;
+            edges.pct_bottom = pct;
+            edges.block_end = None;
+        }
+        "left" => {
+            edges.left = px;
+            edges.pct_left = pct;
+        }
+        _ => unreachable!("not a physical side: {side}"),
+    }
+}
+
 /// `opacity`: a number, clamped to 0..=1 as CSS clamps it.
 fn parse_opacity(ctx: &str, name: &str, value: &str) -> Result<f32, ParseError> {
     Ok(parse_f32(ctx, name, value)?.clamp(0.0, 1.0))
@@ -3997,6 +4041,31 @@ fn apply_declaration(
         }
         "padding" => attrs.padding = Some(parse_edges(ctx, name, value)?),
         "margin" => attrs.margin = Some(parse_edges(ctx, name, value)?),
+        // The physical longhands change one side and keep the other three,
+        // whatever an earlier `padding` / `margin` / `inset` set them to.
+        "padding-top" | "padding-right" | "padding-bottom" | "padding-left" => {
+            let side = crate::values::parse_edge_side(ctx, name, value)?;
+            let edges = attrs
+                .padding
+                .get_or_insert_with(crate::layout_ir::Edges::default);
+            set_physical_side(edges, &name["padding-".len()..], side);
+        }
+        "margin-top" | "margin-right" | "margin-bottom" | "margin-left" => {
+            let side = crate::values::parse_edge_side(ctx, name, value)?;
+            let edges = attrs
+                .margin
+                .get_or_insert_with(crate::layout_ir::Edges::default);
+            set_physical_side(edges, &name["margin-".len()..], side);
+        }
+        "top" | "right" | "bottom" | "left" => {
+            let side = crate::values::parse_inset_side(ctx, name, value)?;
+            // The sides this longhand does not name stay as they were,
+            // `auto` when nothing set them.
+            let edges = attrs
+                .inset
+                .get_or_insert_with(crate::layout_ir::Edges::auto);
+            set_physical_side(edges, name, side);
+        }
         "text-color" => attrs.text_color = Some(parse_color(ctx, name, value)?),
         "selection-color" => attrs.selection_color = Some(parse_color(ctx, name, value)?),
         "caret-color" => attrs.caret_color = Some(parse_color(ctx, name, value)?),

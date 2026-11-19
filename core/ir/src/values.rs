@@ -705,6 +705,29 @@ pub fn parse_inset_edges(ctx: &str, name: &str, value: &str) -> Result<Edges, Pa
     )
 }
 
+/// One physical `padding` / `margin` longhand (`padding-right: 12`): a px
+/// number or a percentage, the way one term of [`parse_edges`] reads.
+pub fn parse_edge_side(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<(f32, Option<f32>), ParseError> {
+    parse_edge_term(ctx, name, value, value)
+}
+
+/// One physical `inset` longhand (`top: 8`): a px number, a percentage, or
+/// `auto` (`NaN`), the way one term of [`parse_inset_edges`] reads.
+pub fn parse_inset_side(
+    ctx: &str,
+    name: &str,
+    value: &str,
+) -> Result<(f32, Option<f32>), ParseError> {
+    if value.trim() == "auto" {
+        return Ok((f32::NAN, None));
+    }
+    parse_edge_term(ctx, name, value, value)
+}
+
 /// One `inset` longhand term: a px number, or `auto` (`NaN`).
 pub fn parse_inset_term(ctx: &str, name: &str, value: &str) -> Result<f32, ParseError> {
     if value.trim() == "auto" {

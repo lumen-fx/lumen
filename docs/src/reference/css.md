@@ -427,6 +427,9 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 | `aspect-ratio` | number | none |
 | `padding`, `margin` | edges | `0` |
 | `inset` | edges; any side may be `auto` | `auto` |
+| `padding-top`, `padding-right`, `padding-bottom`, `padding-left` | `<n>`, `<n>px`, or `<n>%` | `0` |
+| `margin-top`, `margin-right`, `margin-bottom`, `margin-left` | `<n>`, `<n>px`, or `<n>%` | `0` |
+| `top`, `right`, `bottom`, `left` | `<n>`, `<n>px`, `<n>%`, or `auto` | `auto` |
 | `position` | `relative`, `absolute` | `relative` |
 | `box-sizing` | `border-box`, `content-box` | `border-box` |
 | `flex-direction` | `row`, `column`, `row-reverse`, `column-reverse` | from the tag |
@@ -446,6 +449,11 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 | `z-index` | integer or `auto` | document order (`auto` is `0`) |
 | `overflow`, `overflow-x`, `overflow-y` | `visible`, `hidden`, `scroll` | `visible` |
 | `layout-boundary` | `true`, `yes` | automatic |
+
+A side longhand changes one side and keeps the other three, so `.head {
+padding-right: 40 }` over a less specific `padding: 4` leaves the head
+with `4` on its top, bottom and left. `top`, `right`, `bottom` and `left`
+are the sides of `inset`.
 
 `overflow: scroll` makes an element a live scroll container. `overflow:
 hidden` cuts its descendants off at the element's box without making it

@@ -1105,6 +1105,36 @@ fn parser_css_padding_inline_start_writes_edges_ir_field() {
 }
 
 #[test]
+fn parser_css_physical_longhands_change_one_side_over_the_shorthand() {
+    let mut ir = parse_html(r##"<root><tile class="panel head"/></root>"##).expect("html");
+    let css = lumenc::parse_css(
+        r".panel { padding: 4; margin: 2 6; }
+          .panel.head { padding-right: 40; margin-top: 10%; margin-left: 1; }",
+    )
+    .expect("css");
+    let warnings = lumenc::apply_css(&mut ir, &css).expect("apply");
+    assert!(warnings.is_empty(), "no property is unknown: {warnings:?}");
+    let attrs = &ir.root.children[0].attrs;
+    let p = attrs.padding.expect("padding");
+    assert_eq!((p.top, p.right, p.bottom, p.left), (4.0, 40.0, 4.0, 4.0));
+    let m = attrs.margin.expect("margin");
+    assert_eq!(m.pct_top, Some(10.0));
+    assert_eq!((m.right, m.bottom, m.left), (6.0, 2.0, 1.0));
+}
+
+#[test]
+fn parser_css_physical_inset_longhands_leave_the_other_sides_auto() {
+    let mut ir = parse_html(r##"<root><tile class="pin"/></root>"##).expect("html");
+    let css = lumenc::parse_css(r".pin { position: absolute; top: 8; right: 25%; }").expect("css");
+    let warnings = lumenc::apply_css(&mut ir, &css).expect("apply");
+    assert!(warnings.is_empty(), "no property is unknown: {warnings:?}");
+    let inset = ir.root.children[0].attrs.inset.expect("inset");
+    assert_eq!(inset.top, 8.0);
+    assert_eq!(inset.pct_right, Some(25.0));
+    assert!(inset.bottom.is_nan() && inset.left.is_nan(), "{inset:?}");
+}
+
+#[test]
 fn parser_css_margin_and_inset_logical_edges_land_in_ir() {
     let mut ir = parse_html(r##"<root><tile class="box"/></root>"##).expect("html");
     let css = lumenc::parse_css(
