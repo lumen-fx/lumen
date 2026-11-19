@@ -1338,7 +1338,7 @@ Used by:
 --------
 Apache License 2.0
 Used by:
-- candela-lang 0.1.6 - https://github.com/lumen-fx/candela
+- candela-lang 0.2.0 - https://github.com/lumen-fx/candela
 
                                  Apache License
                            Version 2.0, January 2004
@@ -1545,9 +1545,9 @@ Used by:
 --------
 Apache License 2.0
 Used by:
-- candela-lang 0.1.6 - https://github.com/lumen-fx/candela
-- candela-lang 0.1.6 - https://github.com/lumen-fx/candela
-- candela-vm 0.1.6 - https://github.com/lumen-fx/candela
+- candela-lang 0.2.0 - https://github.com/lumen-fx/candela
+- candela-lang 0.2.0 - https://github.com/lumen-fx/candela
+- candela-vm 0.2.0 - https://github.com/lumen-fx/candela
 
                                  Apache License
                            Version 2.0, January 2004
@@ -2656,7 +2656,7 @@ express Statement of Purpose.
 --------
 Community Data License Agreement Permissive 2.0
 Used by:
-- webpki-roots 1.0.9 - https://github.com/rustls/webpki-roots
+- webpki-roots 1.0.11 - https://github.com/rustls/webpki-roots
 
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -3286,7 +3286,7 @@ THIS SOFTWARE.
 --------
 ISC License
 Used by:
-- rustls-webpki 0.103.15 - https://github.com/rustls/webpki
+- rustls-webpki 0.103.16 - https://github.com/rustls/webpki
 
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -5554,7 +5554,7 @@ DEALINGS IN THE SOFTWARE.
 --------
 MIT License
 Used by:
-- rustls 0.23.45 - https://github.com/rustls/rustls
+- rustls 0.23.46 - https://github.com/rustls/rustls
 
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
 
@@ -8780,40 +8780,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 --------
 MIT License
 Used by:
-- arbitrary 1.4.2 - https://github.com/rust-fuzz/arbitrary/
-- derive_arbitrary 1.4.2 - https://github.com/rust-fuzz/arbitrary
-
-MIT License
-
-Copyright (c) 2019 Manish Goregaokar
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
---------
-MIT License
-Used by:
 - ureq 3.3.0 - https://github.com/algesten/ureq
 
 MIT License
@@ -9504,6 +9470,7 @@ Used by:
 - objc2-encode 4.1.0 - https://github.com/madsmtm/objc2
 - objc2-foundation 0.2.2 - https://github.com/madsmtm/objc2
 - objc2-foundation 0.3.2 - https://github.com/madsmtm/objc2
+- objc2-io-surface 0.3.2 - https://github.com/madsmtm/objc2
 - objc2-metal 0.3.2 - https://github.com/madsmtm/objc2
 - objc2-quartz-core 0.3.2 - https://github.com/madsmtm/objc2
 - objc2-ui-kit 0.2.2 - https://github.com/madsmtm/objc2
@@ -10069,6 +10036,7 @@ Used by:
 - thiserror-impl 2.0.19 - https://github.com/dtolnay/thiserror
 - thiserror 1.0.69 - https://github.com/dtolnay/thiserror
 - thiserror 2.0.19 - https://github.com/dtolnay/thiserror
+- typed-path 0.13.0 - https://github.com/chipsenkbeil/typed-path
 - unic-langid-impl 0.9.6 - https://github.com/zbraniecki/unic-locale
 - unic-langid 0.9.6 - https://github.com/zbraniecki/unic-locale
 - unicode-ident 1.0.24 - https://github.com/dtolnay/unicode-ident
@@ -10251,7 +10219,7 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 --------
 MIT License
 Used by:
-- pulldown-cmark 0.13.4 - https://github.com/raphlinus/pulldown-cmark
+- pulldown-cmark 0.13.6 - https://github.com/raphlinus/pulldown-cmark
 
 The MIT License
 
@@ -10331,6 +10299,7 @@ SOFTWARE.
 MIT License
 Used by:
 - tracing-core 0.1.36 - https://github.com/tokio-rs/tracing
+- zip 9.3.0 - https://github.com/zip-rs/zip2
 
 The MIT License (MIT)
 
@@ -10354,35 +10323,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
---------
-MIT License
-Used by:
-- zip 6.0.0 - https://github.com/zip-rs/zip2.git
-
-The MIT License (MIT)
-
-Copyright (c) 2014 Mathijs van de Nes
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-Some files in the "tests/data" subdirectory of this repository are under other
-licences; see files named LICENSE.*.txt for details.
 --------
 MIT License
 Used by:
@@ -12541,98 +12481,102 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 --------
 Mozilla Public License 2.0
 Used by:
-- lumen-a11y-accesskit 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-async-tokio 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-http-ureq 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-layout-taffy 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-render-cpu 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-render-wgpu 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-text-cosmic 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-window-winit 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-window-winit-drag 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-async-tokio-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-devtools-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-http-ureq-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-layout-taffy-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-mcp-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-crash-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-filedialog-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-hotkey-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-launcher-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-lifecycle-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-notify-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-power-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-tray-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-render-cpu-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-render-gpu-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-window-winit-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-window-winit-drag-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-core 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-assets 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-capability 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-capability-macros 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-i18n 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-input 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-ir 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-mcp 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-module-registry 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-modules 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-paint 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-plugin-abi 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-primitives 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-runtime 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-scene 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-script 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-text 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-widget 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-widget-macros 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-devtools 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-clipboard 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-crash 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-crash-report 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-dnd 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-filedialog 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-hotkey 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-launcher 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-lifecycle 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-menu 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-mime 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-notify 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-power 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-os-tray 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-module 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-module-macros 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-plugin 0.0.11 - https://github.com/lumen-fx/lumen
-- lumenc 0.0.11 - https://github.com/lumen-fx/lumen
-- lumenc-plugin 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-archive 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-audio 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-browser 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-candela 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-candela-dev 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-candela-dev-host 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-candela-host 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-canvas 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-cookie 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-dock 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-dock-model 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-download 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-fs 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-js 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-lua 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-process 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-rhai 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-storage 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-surface 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-surface-protocol 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-svg 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-websocket 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-web 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-html 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-web-http 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-portable 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-prerender 0.0.11 - https://github.com/lumen-fx/lumen
-- lumen-ssr 0.0.11 - https://github.com/lumen-fx/lumen
+- lumen-a11y-accesskit 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-async-tokio 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-http-ureq 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-layout-taffy 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-render-cpu 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-render-wgpu 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-text-cosmic 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-window-winit 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-window-winit-drag 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-animations-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-async-tokio-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-devtools-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-http-ureq-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-layout-taffy-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-mcp-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-crash-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-filedialog-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-hotkey-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-launcher-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-lifecycle-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-notify-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-power-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-tray-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-render-cpu-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-render-gpu-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-window-winit-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-window-winit-drag-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-core 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-animations 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-assets 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-capability 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-capability-macros 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-i18n 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-input 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-ir 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-mcp 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-module-registry 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-modules 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-paint 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-plugin-abi 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-primitives 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-runtime 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-scene 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-script 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-text 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-widget 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-widget-macros 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-devtools 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-clipboard 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-crash 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-crash-report 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-dnd 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-filedialog 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-hotkey 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-launcher 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-lifecycle 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-menu 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-mime 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-notify 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-power 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-os-tray 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-module 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-module-macros 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-plugin 0.0.12 - https://github.com/lumen-fx/lumen
+- lumenc 0.0.12 - https://github.com/lumen-fx/lumen
+- lumenc-plugin 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-archive 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-audio 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-browser 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-candela 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-candela-dev 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-candela-dev-host 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-candela-host 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-canvas 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-commands 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-cookie 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-dock 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-dock-model 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-download 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-fs 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-js 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-lua 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-process 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-rhai 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-storage 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-surface 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-surface-protocol 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-svg 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-websocket 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-web 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-web-dom 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-html 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-web-http 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-portable 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-prerender 0.0.12 - https://github.com/lumen-fx/lumen
+- lumen-ssr 0.0.12 - https://github.com/lumen-fx/lumen
 - option-ext 0.2.0 - https://github.com/soc/option-ext.git
 - symphonia-codec-pcm 0.5.5 - https://github.com/pdeljanov/Symphonia
 - symphonia-codec-vorbis 0.5.5 - https://github.com/pdeljanov/Symphonia
