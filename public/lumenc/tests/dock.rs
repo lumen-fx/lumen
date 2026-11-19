@@ -1366,6 +1366,7 @@ fn the_tab_menu_moves_panels_out_and_back() {
             A::Float,
             A::Pin,
             A::Maximize,
+            A::Collapse,
             A::Close
         ],
         "a docked panel sharing its stack"
@@ -1453,6 +1454,40 @@ fn the_tab_menu_moves_panels_out_and_back() {
         "{:?}",
         announced(app)
     );
+}
+
+/// The tab menu folds a docked panel's stack to its tab strip and unfolds
+/// it again (#642).
+#[test]
+fn the_tab_menu_collapses_and_expands_a_stack() {
+    use lumen_dock::MenuAction as A;
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = build("collapse-menu", COLUMN, CANDELA, "");
+    let app = &mut t.app;
+    let middle = entity(app, "middle");
+    let stack = stack_of(app, middle).0;
+    let open_height = rect(app, stack).1.y;
+    let pick = |app: &mut App, action: A| {
+        let tab = tab_button(app, "middle");
+        context_menu(app, tab);
+        let item = menu_items(app)
+            .into_iter()
+            .find(|i| i.1 == action)
+            .unwrap_or_else(|| panic!("the menu offers {action:?}"))
+            .0;
+        let text = app
+            .world
+            .get::<lumen_core::components::TextContent>(item)
+            .map(|t| t.0.clone());
+        click(app, item, lumen_core::input::PointerButton::Primary);
+        ticks(app, 3);
+        text
+    };
+    assert_eq!(pick(app, A::Collapse).as_deref(), Some("Collapse"));
+    let folded = rect(app, stack).1.y;
+    assert!(folded < 40.0, "only the tab strip is left: {folded}");
+    assert_eq!(pick(app, A::Expand).as_deref(), Some("Expand"));
+    assert!((rect(app, stack).1.y - open_height).abs() < 1.0);
 }
 
 /// The Menu key on a focused tab opens the same menu, and the arrow keys

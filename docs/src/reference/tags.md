@@ -1270,19 +1270,21 @@ these fields in its detail:
 A right click on a tab, or the Menu key or Shift+F10 on a focused tab, opens
 the tab menu: Move to new window, Move group to new window (when the stack
 has other panels), Float (a docked `floatable` panel), Pin to sidebar (the
-edge of the dock nearest the panel), Maximize or Restore layout, Dock back
-(in a window, a float or an edge), and Close (when the panel is closable). Its
-items are `<menu>` items with the ids `lumen-dock-detach`,
-`lumen-dock-detach-group`, `lumen-dock-float`, `lumen-dock-pin`,
-`lumen-dock-maximize`, `lumen-dock-restore`, `lumen-dock-attach` and
-`lumen-dock-close-panel`, so a script's `on_menu` hears them too. A completed
+edge of the dock nearest the panel), Maximize or Restore layout, Collapse or
+Expand (a docked panel whose stack is not maximized: folds the stack to its
+tab strip or unfolds it, as `dock::collapse` does), Dock back (in a window, a
+float or an edge), and Close (when the panel is closable). Its items are
+`<menu>` items with the ids `lumen-dock-detach`, `lumen-dock-detach-group`,
+`lumen-dock-float`, `lumen-dock-pin`, `lumen-dock-maximize`,
+`lumen-dock-restore`, `lumen-dock-collapse`, `lumen-dock-expand`,
+`lumen-dock-attach` and `lumen-dock-close-panel`, so a script's `on_menu` hears them too. A completed
 move is announced to screen readers: "Inspector moved to a new window",
 "Inspector docked back", "Inspector moved beside Scene", "Inspector
 floating", "Inspector pinned to the sidebar". The menu labels and the
 announcements are the module's messages (`lumen-dock-move-to-window`,
 `lumen-dock-move-group-to-window`, `lumen-dock-float`, `lumen-dock-pin`,
-`lumen-dock-maximize`, `lumen-dock-restore`, `lumen-dock-dock-back`,
-`lumen-dock-close`, `lumen-dock-moved-to-window`, `lumen-dock-docked-back`,
+`lumen-dock-maximize`, `lumen-dock-restore`, `lumen-dock-collapse`,
+`lumen-dock-expand`, `lumen-dock-dock-back`, `lumen-dock-close`, `lumen-dock-moved-to-window`, `lumen-dock-docked-back`,
 `lumen-dock-moved-beside`, `lumen-dock-moved`, `lumen-dock-floated`,
 `lumen-dock-pinned`, `lumen-dock-more-tabs`, `lumen-dock-unpin`), which an app
 rewords or translates by writing the same ids in its own catalogue.
