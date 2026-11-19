@@ -1315,12 +1315,23 @@ fn collect_matching_rules(
     // CSS Cascade section 6.4 it participates at the declaration level, and the
     // apply/var passes stable-sort each declaration by its own
     // `!important` flag on top of this base ordering.
-    matched.sort_by(|a, b| {
-        a.origin
-            .cmp(&b.origin)
-            .then_with(|| a.specificity.cmp(&b.specificity))
-            .then_with(|| a.source_order.cmp(&b.source_order))
-            .then_with(|| a.selector_idx.cmp(&b.selector_idx))
+    //
+    // Two stable passes through the shared rank sort, the less significant
+    // key first, so the cascade adds no sort code of its own.
+    use lumen_core::order::sort_by_rank;
+    sort_by_rank(&mut matched, |m| {
+        let low = |n: usize| (n as u64).min(u64::from(u32::MAX));
+        (low(m.source_order) << 32) | low(m.selector_idx)
+    });
+    sort_by_rank(&mut matched, |m| {
+        // 21 bits a component: a selector would need two million ids,
+        // classes or types in one compound list to reach the cap.
+        let part = |n: u32| u64::from(n.min((1 << 21) - 1));
+        let origin = u64::from(matches!(m.origin, Origin::Author));
+        (origin << 63)
+            | (part(m.specificity.a) << 42)
+            | (part(m.specificity.b) << 21)
+            | part(m.specificity.c)
     });
     matched
 }

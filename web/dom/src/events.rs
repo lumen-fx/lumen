@@ -26,9 +26,17 @@
 //! navigating (soft mode intercepts it; [`should_soft_navigate`] is the
 //! decision), whether a script handler cancels a link the browser would
 //! otherwise follow (the app runs its next tick inside the listener to find
-//! out; see [`set_run_now`]), and whether a `dragover` is accepted at all (a
+//! out; see [`set_run_now`]), whether a `dragover` is accepted at all (a
 //! target has to call `preventDefault` or the browser refuses the `drop` that
-//! would follow).
+//! would follow), and what a `dragstart` puts in the browser's `DataTransfer`
+//! (the app runs its `dragstart` handlers inside the listener, so a
+//! `set_data` lands in the drag the browser carries).
+//!
+//! An in-app drag keeps the `ActiveDrag` session the desktop's drag plugin
+//! keeps, queues the same DOM drag events, and writes the `DragStarted` and
+//! `DropAccepted` messages `on_drag_start` and `on_drop` hear, so the DOM
+//! drag events, the `:drag-over` marker and `on_drop` behave the same on a
+//! page.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -45,11 +53,16 @@ use lumen_core::input::{
 use lumen_core::nav;
 use lumen_core::property_store::PropertyStore;
 use lumen_core::text_events::{AppliedKind, TextEditApplied};
-use lumen_html::contract::{DATA_LM, DATA_LM_PART, DRAWN_BY_CONTROL};
-use lumen_os_dnd::DropAccept;
-use lumen_os_dnd::mime::MimeKind;
+use lumen_html::contract::{
+    DATA_LM, DATA_LM_DRAG, DATA_LM_DRAG_TYPE, DATA_LM_PART, DRAWN_BY_CONTROL,
+};
+use lumen_os_dnd::mime::{MimeKind, MimePayload};
+use lumen_os_dnd::{
+    ActiveDrag, ActiveDragData, DragSource, DragStarted, DropAccept, DropAccepted, DropEffect,
+};
 use lumen_primitives::ColorInput;
 use lumen_scene::spawn::IfMarker;
+use lumen_script::PendingDomEvents;
 
 use crate::navigation::Routes;
 use wasm_bindgen::JsCast;
@@ -58,6 +71,17 @@ use web_sys::{
     DragEvent, Element, Event, EventTarget, HtmlAnchorElement, HtmlElement, HtmlInputElement,
     HtmlTextAreaElement, KeyboardEvent, MouseEvent,
 };
+
+/// Which way a drag crossed a node.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DragStep {
+    /// `dragenter`.
+    Enter,
+    /// `dragover`.
+    Over,
+    /// `dragleave`.
+    Leave,
+}
 
 /// One thing the browser told us, waiting for the next tick.
 enum PendingEvent {
@@ -109,19 +133,24 @@ enum PendingEvent {
         /// True when focus arrived, false when it left.
         gained: bool,
     },
-    /// A drag entered the node at this path (or a descendant of it).
-    DragEnter {
-        /// Node path of the element the event landed on.
+    /// An in-app drag began on the drag source at this path.
+    DragStart {
+        /// Node path of the source.
         path: String,
-        /// Kinds the drag advertises, read off its `DataTransfer`.
-        kinds: Vec<MimeKind>,
+        /// Client coordinates of the pointer.
+        position: glam::Vec2,
     },
-    /// A drag left the node at this path (or a descendant of it).
-    DragLeave {
+    /// A drag entered (`enter`), moved over (`over`) or left the node at
+    /// this path (or a descendant of it).
+    DragStep {
+        /// Which of the three it was.
+        step: DragStep,
         /// Node path of the element the event landed on.
         path: String,
         /// Kinds the drag advertises, read off its `DataTransfer`.
         kinds: Vec<MimeKind>,
+        /// Client coordinates of the pointer.
+        position: glam::Vec2,
     },
     /// Something was dropped on the node at this path (or a descendant).
     Drop {
@@ -129,6 +158,16 @@ enum PendingEvent {
         path: String,
         /// Kinds the drag advertises, read off its `DataTransfer`.
         kinds: Vec<MimeKind>,
+        /// Client coordinates of the pointer.
+        position: glam::Vec2,
+        /// What a drag from outside the page carries; an in-app drag's
+        /// payload is the one its session holds.
+        payload: MimePayload,
+    },
+    /// The in-app drag ended, dropped or not.
+    DragEnd {
+        /// Client coordinates of the pointer.
+        position: glam::Vec2,
     },
     /// A drag left the document entirely, so every drop target's hover
     /// marker clears regardless of which one it landed on last.
@@ -203,6 +242,12 @@ thread_local! {
     /// The node the last context-menu request delivered to the world landed
     /// on, as the packed handle its handlers saw as the event's target.
     static LAST_CONTEXT_MENU: Cell<Option<u64>> = const { Cell::new(None) };
+
+    /// The payload of the in-app drag after the last tick, published at
+    /// the end of a tick when the session changed: `Some(None)` when it
+    /// ended or a `dragstart` handler cancelled it. What the `dragstart`
+    /// listener hands the browser; [`publish_drag`] writes it.
+    static DRAG_NOW: RefCell<Option<Option<MimePayload>>> = const { RefCell::new(None) };
 
     /// Whether the document already carries the key and pointer listeners.
     ///
@@ -425,6 +470,91 @@ fn drag_kinds(event: &Event) -> Vec<MimeKind> {
         .filter_map(|t| t.as_string())
         .map(|t| kind_of_dom_type(&t))
         .collect()
+}
+
+/// Client coordinates of a drag event's pointer.
+fn drag_position(event: &Event) -> glam::Vec2 {
+    event.dyn_ref::<MouseEvent>().map_or(glam::Vec2::ZERO, |m| {
+        glam::Vec2::new(m.client_x() as f32, m.client_y() as f32)
+    })
+}
+
+/// What a drag from outside the page carries, read at the drop: each type's
+/// data, and the files as a `text/uri-list` of their names (a page is never
+/// told a dropped file's path).
+fn dropped_payload(event: &Event) -> MimePayload {
+    let mut payload = MimePayload::new();
+    let Some(transfer) = event
+        .dyn_ref::<DragEvent>()
+        .and_then(DragEvent::data_transfer)
+    else {
+        return payload;
+    };
+    for dom_type in transfer.types().iter().filter_map(|t| t.as_string()) {
+        if dom_type == "Files" {
+            let names: Vec<std::path::PathBuf> = transfer
+                .files()
+                .map(|files| {
+                    (0..files.length())
+                        .filter_map(|i| files.item(i))
+                        .map(|file| file.name().into())
+                        .collect()
+                })
+                .unwrap_or_default();
+            payload.kinds.extend(MimePayload::from(names).kinds);
+        } else if let Ok(data) = transfer.get_data(&dom_type) {
+            payload.set(MimeKind::from(dom_type.as_str()), data.into_bytes());
+        }
+    }
+    payload
+}
+
+/// Publish the in-app drag's payload for the `dragstart` listener whenever
+/// the session changed this tick: what the source offered, with whatever
+/// its `dragstart` handlers added, or nothing when one cancelled the drag.
+pub fn publish_drag(active: Res<ActiveDrag>) {
+    if active.is_changed() {
+        let now = active.0.as_ref().map(|d| d.payload.clone());
+        DRAG_NOW.with_borrow_mut(|slot| *slot = Some(now));
+    }
+}
+
+/// The drag-session half of [`drain_dom_events`], grouped so the system
+/// stays inside the parameter limit.
+#[derive(bevy_ecs::system::SystemParam)]
+pub struct DragSession<'w, 's> {
+    targets: Query<'w, 's, Option<&'static DropAccept>, With<DropTarget>>,
+    sources: Query<'w, 's, &'static DragSource>,
+    active: ResMut<'w, ActiveDrag>,
+    started: MessageWriter<'w, DragStarted>,
+    dropped: MessageWriter<'w, DropAccepted>,
+    events: ResMut<'w, PendingDomEvents>,
+    last: Local<'s, DragTrack>,
+}
+
+impl DragSession<'_, '_> {
+    /// Queue the DOM drag event `kind` on `entity`, its local position
+    /// measured from the entity's element as the page lays it out now.
+    fn event(
+        &mut self,
+        table: &crate::nodes::NodeTable,
+        kind: &str,
+        entity: Entity,
+        position: glam::Vec2,
+        payload: &MimePayload,
+    ) {
+        let origin = table.element(entity).map_or(glam::Vec2::ZERO, origin_of);
+        self.events
+            .push_drag(kind, entity, position, position - origin, payload);
+    }
+}
+
+/// What the page's drag session remembers between events.
+#[derive(Default)]
+pub struct DragTrack {
+    /// Where the last `dragover` was, so a drag holding still says nothing
+    /// new.
+    over_at: Option<glam::Vec2>,
 }
 
 /// Walk up from `start` to the nearest entity - itself or an ancestor - that
@@ -1051,15 +1181,76 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
             }
         }) as Box<dyn FnMut(Event)>),
     )?;
+    // An in-app drag begins on a drag source. The app runs its `dragstart`
+    // handlers now, inside the browser's dispatch, so what they add with
+    // `set_data` is in the `DataTransfer` the browser carries and a
+    // `prevent_default` cancels the drag. An app that cannot tick now (it is
+    // mid-tick) hands over the payload the emitter wrote on the element.
+    on(
+        root,
+        "dragstart",
+        Closure::wrap(Box::new(move |event: Event| {
+            let Some(source) = event
+                .target()
+                .and_then(|t| t.dyn_into::<Element>().ok())
+                .and_then(|t| t.closest("[draggable=\"true\"]").ok().flatten())
+            else {
+                return;
+            };
+            let Some(path) = source.get_attribute(DATA_LM) else {
+                return;
+            };
+            queue(PendingEvent::DragStart {
+                path,
+                position: drag_position(&event),
+            });
+            DRAG_NOW.with_borrow_mut(|slot| *slot = None);
+            let ran = run_now();
+            let payload = match DRAG_NOW.with_borrow_mut(Option::take).filter(|_| ran) {
+                Some(Some(payload)) => payload,
+                Some(None) => return event.prevent_default(),
+                None => match source.get_attribute(DATA_LM_DRAG) {
+                    Some(text) => MimePayload::new().with(
+                        MimeKind::from(
+                            source
+                                .get_attribute(DATA_LM_DRAG_TYPE)
+                                .unwrap_or_default()
+                                .as_str(),
+                        ),
+                        text.into_bytes(),
+                    ),
+                    // Not an in-app drag source: the browser's own drag.
+                    None => return,
+                },
+            };
+            if let Some(transfer) = event
+                .dyn_ref::<DragEvent>()
+                .and_then(DragEvent::data_transfer)
+            {
+                for (kind, bytes) in &payload.kinds {
+                    let _ = transfer.set_data(kind.essence(), &String::from_utf8_lossy(bytes));
+                }
+            }
+        }) as Box<dyn FnMut(Event)>),
+    )?;
     // `dragover` fires continuously while a drag hovers, and the browser
     // refuses `drop` on any element whose `dragover` did not prevent the
-    // default action - accepting a drop is opt-in the same way it is for a
-    // hand-written page, so every drop target says so unconditionally.
+    // default action. Every one is prevented, which also keeps a file dropped
+    // beside a target from replacing the page; which target takes the drop is
+    // decided when it arrives, by the target's `accept` list.
     on(
         root,
         "dragover",
         Closure::wrap(Box::new(move |event: Event| {
             event.prevent_default();
+            if let Some(path) = path_of(&event) {
+                queue(PendingEvent::DragStep {
+                    step: DragStep::Over,
+                    path,
+                    kinds: drag_kinds(&event),
+                    position: drag_position(&event),
+                });
+            }
         }) as Box<dyn FnMut(Event)>),
     )?;
     on(
@@ -1067,11 +1258,22 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
         "dragenter",
         Closure::wrap(Box::new(move |event: Event| {
             if let Some(path) = path_of(&event) {
-                queue(PendingEvent::DragEnter {
+                queue(PendingEvent::DragStep {
+                    step: DragStep::Enter,
                     path,
                     kinds: drag_kinds(&event),
+                    position: drag_position(&event),
                 });
             }
+        }) as Box<dyn FnMut(Event)>),
+    )?;
+    on(
+        root,
+        "dragend",
+        Closure::wrap(Box::new(move |event: Event| {
+            queue(PendingEvent::DragEnd {
+                position: drag_position(&event),
+            });
         }) as Box<dyn FnMut(Event)>),
     )?;
     on(
@@ -1093,9 +1295,11 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
             if left_the_document {
                 queue(PendingEvent::DragCancelled);
             } else if let Some(path) = path_of(&event) {
-                queue(PendingEvent::DragLeave {
+                queue(PendingEvent::DragStep {
+                    step: DragStep::Leave,
                     path,
                     kinds: drag_kinds(&event),
+                    position: drag_position(&event),
                 });
             }
         }) as Box<dyn FnMut(Event)>),
@@ -1113,6 +1317,8 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
                 queue(PendingEvent::Drop {
                     path,
                     kinds: drag_kinds(&event),
+                    position: drag_position(&event),
+                    payload: dropped_payload(&event),
                 });
             }
         }) as Box<dyn FnMut(Event)>),
@@ -1306,7 +1512,7 @@ pub fn drain_dom_events(
     mut toggles: Query<&mut Toggleable>,
     mut sliders: Query<&mut SliderValue>,
     focus: Option<ResMut<FocusTracker>>,
-    drop_targets: Query<Option<&DropAccept>, With<DropTarget>>,
+    mut drag: DragSession,
     parents: Query<&ChildOf>,
     mut hover_depth: Local<HoverDepth>,
 ) {
@@ -1485,57 +1691,131 @@ pub fn drain_dom_events(
                     }
                 }
             }
+            // The browser began an in-app drag: open the session the
+            // desktop's drag plugin opens, from the source's own payload.
+            PendingEvent::DragStart { path, position } => {
+                let Some(entity) = table.entity_at(&path) else {
+                    continue;
+                };
+                let Ok(source) = drag.sources.get(entity) else {
+                    continue;
+                };
+                drag.active.0 = Some(ActiveDragData {
+                    source: entity,
+                    payload: source.payload.clone(),
+                    effects: source.effects,
+                });
+                let payload = source.payload.clone();
+                drag.event(&table, "dragstart", entity, position, &payload);
+                drag.started.write(DragStarted {
+                    source: entity,
+                    payload,
+                    position,
+                });
+                *drag.last = DragTrack::default();
+            }
             // `DropHovered` is what `project_control_state` mirrors onto
             // `data-lm-drag-over`, so a target under a drag reads the same
             // way it does on the desktop, where the pointer-gesture pipeline
             // (`lumen-os-dnd::track_drop_hover`) inserts the same marker.
             // The state machine itself - what a resolved entity and the
             // current counts do to `hover_depth` - is the plain-data
-            // functions above; this arm is only resolving the path to an
+            // functions above; these arms only resolve the path to an
             // entity (which needs `table`, the one thing here a native test
-            // cannot construct) and turning their answer into a `Commands`
+            // cannot construct) and turn their answer into a `Commands`
             // write.
             //
-            // All three drag arms resolve through the same filtered walk, on
+            // The step and drop arms resolve through the same filtered walk, on
             // each event's own kinds. They have to agree: a leave resolved
             // unfiltered while its enter resolved filtered would leave a
             // marker lit with nothing left to clear it.
-            PendingEvent::DragEnter { path, kinds } => {
+            PendingEvent::DragStep {
+                step,
+                path,
+                kinds,
+                position,
+            } => {
                 let Some(entity) = table.entity_at(&path) else {
                     continue;
                 };
-                let resolved =
-                    nearest_accepting_drop_target(entity, &kinds, &drop_targets, &parents);
-                if let Some(target) = resolved
-                    && enter_drop_target(&mut hover_depth, target)
-                {
+                let Some(target) =
+                    nearest_accepting_drop_target(entity, &kinds, &drag.targets, &parents)
+                else {
+                    continue;
+                };
+                let changed = match step {
+                    DragStep::Enter => enter_drop_target(&mut hover_depth, target),
+                    DragStep::Leave => leave_drop_target(&mut hover_depth, target),
+                    DragStep::Over => false,
+                };
+                if changed && step == DragStep::Enter {
                     commands.entity(target).insert(DropHovered);
+                } else if changed {
+                    commands.entity(target).remove::<DropHovered>();
                 }
-            }
-            PendingEvent::DragLeave { path, kinds } => {
-                let Some(entity) = table.entity_at(&path) else {
+                // The DOM drag events are the in-app drag's, as on the
+                // desktop: a file dragged in from outside reaches `drop`.
+                let Some(payload) = drag.active.0.as_ref().map(|d| d.payload.clone()) else {
                     continue;
                 };
-                let resolved =
-                    nearest_accepting_drop_target(entity, &kinds, &drop_targets, &parents);
-                if let Some(target) = resolved
-                    && leave_drop_target(&mut hover_depth, target)
-                {
-                    commands.entity(target).remove::<DropHovered>();
+                if step == DragStep::Over && drag.last.over_at == Some(position) {
+                    continue;
+                }
+                match step {
+                    DragStep::Leave if changed => {
+                        drag.event(&table, "dragleave", target, position, &payload);
+                    }
+                    DragStep::Enter if changed => {
+                        drag.event(&table, "dragenter", target, position, &payload);
+                    }
+                    DragStep::Over => {
+                        drag.last.over_at = Some(position);
+                        drag.event(&table, "dragover", target, position, &payload);
+                    }
+                    _ => {}
                 }
             }
             // A drop ends the gesture outright, so the marker clears however
             // many unmatched enters this target still has on the books.
-            PendingEvent::Drop { path, kinds } => {
+            PendingEvent::Drop {
+                path,
+                kinds,
+                position,
+                payload,
+            } => {
                 let Some(entity) = table.entity_at(&path) else {
                     continue;
                 };
-                if let Some(target) =
-                    nearest_accepting_drop_target(entity, &kinds, &drop_targets, &parents)
-                {
-                    clear_drop_target(&mut hover_depth, target);
-                    commands.entity(target).remove::<DropHovered>();
-                }
+                let Some(target) =
+                    nearest_accepting_drop_target(entity, &kinds, &drag.targets, &parents)
+                else {
+                    continue;
+                };
+                clear_drop_target(&mut hover_depth, target);
+                commands.entity(target).remove::<DropHovered>();
+                let (source, payload, effects) = match &drag.active.0 {
+                    Some(d) => (Some(d.source), d.payload.clone(), d.effects),
+                    None => (None, payload, lumen_os_dnd::DropEffectSet::COPY),
+                };
+                let allowed = match drag.targets.get(target) {
+                    Ok(Some(accept)) => accept.effects.intersect(effects),
+                    _ => effects,
+                };
+                let effect = DropEffect::pick(allowed);
+                drag.event(&table, "drop", target, position, &payload);
+                drag.dropped.write(DropAccepted {
+                    source,
+                    target,
+                    payload,
+                    effect,
+                    position,
+                });
+            }
+            PendingEvent::DragEnd { position } => {
+                let Some(d) = drag.active.0.take() else {
+                    continue;
+                };
+                drag.event(&table, "dragend", d.source, position, &MimePayload::new());
             }
             // The drag left the document, which is not an event any one
             // target's count can see: clear every target this build still

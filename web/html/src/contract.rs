@@ -49,7 +49,10 @@ use crate::urls::{join, normalize_base};
 /// boot module hands their modules to the runtime, and the elements they
 /// answer for. An element of one of those is written with [`DATA_LM_FOREIGN`]
 /// and its contents are the add-on's, not nodes the runtime binds.
-pub const LM_CONTRACT_VERSION: u32 = 6;
+///
+/// 7: an in-app drag source carries `draggable="true"` with [`DATA_LM_DRAG`]
+/// and [`DATA_LM_DRAG_TYPE`], so the browser runs the drag.
+pub const LM_CONTRACT_VERSION: u32 = 7;
 
 /// Node identity: the [`NodePath`] of the IR node this element came from.
 pub const DATA_LM: &str = "data-lm";
@@ -108,6 +111,13 @@ pub const DATA_LM_DISABLED: &str = "data-lm-disabled";
 
 /// Mirror of the drop-target hover state Lumen calls `:drag-over`.
 pub const DATA_LM_DRAG_OVER: &str = "data-lm-drag-over";
+
+/// The payload an in-app drag source (`drag-payload`) publishes, as text.
+/// The element also carries `draggable="true"`, so the browser runs the drag.
+pub const DATA_LM_DRAG: &str = "data-lm-drag";
+
+/// The MIME kind [`DATA_LM_DRAG`] is published under (`drag-type`).
+pub const DATA_LM_DRAG_TYPE: &str = "data-lm-drag-type";
 
 /// Present on a branch that is mounted but not shown, which is what an
 /// `<if mode="hide">` does.

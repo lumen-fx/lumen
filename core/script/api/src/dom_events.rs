@@ -104,7 +104,6 @@ use lumen_core::signals::MountedRangeChanged;
 use crate::ScriptHost;
 use crate::event::{self, EventData};
 use crate::runtime::ScriptCommandEvent;
-#[cfg(not(target_arch = "wasm32"))]
 use lumen_os_dnd::mime::MimePayload;
 
 /// Root-first ancestor chain (packed handles) of `entity`, excluding itself,
@@ -258,6 +257,32 @@ pub struct PendingDomEvents {
     custom: Vec<CustomEvent>,
 }
 
+impl PendingDomEvents {
+    /// Queue a drag event, `kind` one of `dragstart`, `dragenter`,
+    /// `dragover`, `dragleave`, `drop` and `dragend`, on `entity`, carrying
+    /// `payload`. `position` is where the pointer is in the window and
+    /// `local` where it is on the entity's box. Delivered with the input
+    /// events, after this tick's pointer events.
+    pub fn push_drag(
+        &mut self,
+        kind: &str,
+        entity: Entity,
+        position: Vec2,
+        local: Vec2,
+        payload: &MimePayload,
+    ) {
+        let mut data = base(entity, kind);
+        data.local = (local.x as f64, local.y as f64);
+        data.client = (position.x as f64, position.y as f64);
+        data.data = payload.clone();
+        self.input.push(QueuedInput {
+            data,
+            target: Some(entity),
+            step: None,
+        });
+    }
+}
+
 /// One input event waiting for delivery.
 struct QueuedInput {
     data: EventData,
@@ -346,7 +371,6 @@ pub fn deliver_input_events(world: &mut World) {
     for queued in events {
         match queued.step {
             Some(step) => deliver_pointer(world, &hosts, queued, step),
-            #[cfg(not(target_arch = "wasm32"))]
             None if queued.data.event_type == "dragstart" => {
                 if let Some(source) = queued.target {
                     deliver_drag_start(world, &hosts, queued.data, source);
@@ -697,13 +721,14 @@ pub fn register_dom_event_messages(world: &mut World) {
     register::<ControlInput>(world);
     register::<CustomEvent>(world);
     register::<CustomEventDelivered>(world);
+    // What `on_drag_start` and `on_drop` hear, on a page too.
+    register::<lumen_os_dnd::DragStarted>(world);
+    register::<lumen_os_dnd::DropAccepted>(world);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        register::<MountedRangeChanged>(world);
-        register::<lumen_os_dnd::DragStarted>(world);
         register::<lumen_os_dnd::DragHovered>(world);
-        register::<lumen_os_dnd::DropAccepted>(world);
         register::<lumen_os_dnd::DragEnded>(world);
+        register::<MountedRangeChanged>(world);
         register::<lumen_primitives::PopoverToggled>(world);
     }
 }
@@ -1001,11 +1026,13 @@ pub fn queue_state_events(
     // pointerenter / pointerleave. Entered elements outermost first; the
     // hit test removes the chain innermost first, which is the order the
     // removals read back in.
-    let mut entered: Vec<(usize, Entity)> = gained_hover
+    let mut entered: Vec<(u32, Entity)> = gained_hover
         .iter()
-        .map(|e| (parents.iter_ancestors(e).count(), e))
+        .map(|e| (parents.iter_ancestors(e).count() as u32, e))
         .collect();
-    entered.sort_unstable();
+    lumen_core::order::sort_by_rank(&mut entered, |&(depth, e)| {
+        lumen_core::order::rank_then_entity(depth, e)
+    });
     for (_, e) in entered {
         queue.push((base(e, "pointerenter"), e));
     }
@@ -1079,8 +1106,8 @@ pub struct DragReaders<'w, 's> {
 /// pointer moved across, then `drop` on the target, then `dragend` on the
 /// source.
 ///
-/// Desktop only: a page has no in-app drag session, so the browser module
-/// carries none of this.
+/// A page's listeners queue the same events from the browser's own drag,
+/// through [`PendingDomEvents::push_drag`].
 #[cfg(not(target_arch = "wasm32"))]
 pub fn queue_drag_events(
     mut pending: ResMut<PendingDomEvents>,
@@ -1089,48 +1116,41 @@ pub fn queue_drag_events(
     dom: Option<Res<AppDom>>,
 ) {
     let _dom = dom.as_deref().map(AppDom::enter);
-    let queue = &mut pending.input;
     let empty = lumen_os_dnd::mime::MimePayload::new();
     let payload = drags
         .active
         .as_ref()
         .and_then(|a| a.0.as_ref())
         .map_or(&empty, |d| &d.payload);
-    let event = |kind: &str, entity: Entity, position: Vec2, data: &MimePayload| {
-        let mut ev = with_position(base(entity, kind), &boxes, entity, position, None);
-        ev.data = data.clone();
-        QueuedInput {
-            data: ev,
-            target: Some(entity),
-            step: None,
-        }
+    let mut event = |kind: &str, entity: Entity, position: Vec2, data: &MimePayload| {
+        let local = position - boxes.origin(entity);
+        pending.push_drag(kind, entity, position, local, data);
     };
     for s in drags.starts.read() {
-        queue.push(event("dragstart", s.source, s.position, &s.payload));
+        event("dragstart", s.source, s.position, &s.payload);
     }
     for h in drags.hovers.read() {
         if let Some(left) = h.left {
-            queue.push(event("dragleave", left, h.position, payload));
+            event("dragleave", left, h.position, payload);
         }
         if let Some(over) = h.over {
             if h.entered {
-                queue.push(event("dragenter", over, h.position, payload));
+                event("dragenter", over, h.position, payload);
             }
-            queue.push(event("dragover", over, h.position, payload));
+            event("dragover", over, h.position, payload);
         }
     }
     for d in drags.drops.read() {
-        queue.push(event("drop", d.target, d.position, &d.payload));
+        event("drop", d.target, d.position, &d.payload);
     }
     for e in drags.ends.read() {
-        queue.push(event("dragend", e.source, e.position, &empty));
+        event("dragend", e.source, e.position, &empty);
     }
 }
 
 /// Deliver a `dragstart`: what its handlers put in the payload with
 /// `set_data` becomes the drag's payload, and a `prevent_default` cancels the
 /// drag, as on the web.
-#[cfg(not(target_arch = "wasm32"))]
 fn deliver_drag_start(world: &mut World, hosts: &EventHosts, data: EventData, source: Entity) {
     let Some(result) = dispatch(world, hosts, data, source, true) else {
         return;

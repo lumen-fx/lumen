@@ -74,9 +74,7 @@ pub struct EventData {
     /// events.
     pub detail: std::collections::HashMap<String, crate::ScriptValue>,
     /// What a drag event carries, one value per MIME kind: the web's
-    /// `DataTransfer`. Empty for every other event. A page raises no drag
-    /// events, so the browser module carries no payload.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// `DataTransfer`. Empty for every other event.
     pub data: lumen_os_dnd::mime::MimePayload,
     /// Set by `prevent_default`: the event's default action is cancelled.
     pub default_prevented: bool,
@@ -232,26 +230,18 @@ pub fn event_detail() -> std::collections::HashMap<String, crate::ScriptValue> {
 }
 
 /// `ev.types()`: the MIME kinds a drag event carries, in the order they were
-/// set (`text/plain`, `application/x-asset`, ...); empty for other events,
-/// and always on a page, which raises no drag events.
+/// set (`text/plain`, `application/x-asset`, ...); empty for other events.
 pub fn event_types() -> Vec<String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        current_cell()
-            .read()
-            .map(|g| {
-                g.data
-                    .kinds
-                    .iter()
-                    .map(|(kind, _)| kind.essence().to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        Vec::new()
-    }
+    current_cell()
+        .read()
+        .map(|g| {
+            g.data
+                .kinds
+                .iter()
+                .map(|(kind, _)| kind.essence().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `ev.get_data(kind)`: the value a drag event carries under `kind`, as text;
@@ -259,24 +249,16 @@ pub fn event_types() -> Vec<String> {
 /// parameters do not count, and `text` / `url` stand for `text/plain` /
 /// `text/uri-list`.
 pub fn event_get_data(kind: &str) -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let kind = lumen_os_dnd::mime::MimeKind::from(kind);
-        current_cell()
-            .read()
-            .ok()
-            .and_then(|g| {
-                g.data
-                    .get(&kind)
-                    .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-            })
-            .unwrap_or_default()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = kind;
-        String::new()
-    }
+    let kind = lumen_os_dnd::mime::MimeKind::from(kind);
+    current_cell()
+        .read()
+        .ok()
+        .and_then(|g| {
+            g.data
+                .get(&kind)
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        })
+        .unwrap_or_default()
 }
 
 /// `ev.set_data(kind, value)`: put `value` in the drag's payload under
@@ -284,23 +266,15 @@ pub fn event_get_data(kind: &str) -> String {
 /// the payload, as on the web; anywhere else this does nothing and answers
 /// false.
 pub fn event_set_data(kind: &str, value: &str) -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        match current_cell().write() {
-            Ok(mut g) if g.event_type == "dragstart" && !kind.trim().is_empty() => {
-                g.data.set(
-                    lumen_os_dnd::mime::MimeKind::from(kind),
-                    value.as_bytes().to_vec(),
-                );
-                true
-            }
-            _ => false,
+    match current_cell().write() {
+        Ok(mut g) if g.event_type == "dragstart" && !kind.trim().is_empty() => {
+            g.data.set(
+                lumen_os_dnd::mime::MimeKind::from(kind),
+                value.as_bytes().to_vec(),
+            );
+            true
         }
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (kind, value);
-        false
+        _ => false,
     }
 }
 

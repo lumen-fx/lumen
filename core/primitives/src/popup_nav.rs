@@ -202,7 +202,9 @@ fn collect_rows(
             ));
         }
     }
-    rows.sort_by_key(|(order, e, _)| (*order, *e));
+    lumen_core::order::sort_by_rank(&mut rows, |(order, e, _)| {
+        lumen_core::order::rank_then_entity(*order, *e)
+    });
     rows.into_iter().map(|(_, _, row)| row).collect()
 }
 

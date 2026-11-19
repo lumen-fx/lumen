@@ -776,8 +776,9 @@ none of them means anything without an absolute address.
   a property rather than from anything the markup can carry, so a page built
   with `render = "static"`, or one whose runtime never arrives, shows the box
   unchecked.
-- `:drag-over` on a `drop-target` lights up while a file is dragged in from
-  the desktop, and clears on a drop, matching the desktop. `accept="..."`
+- `:drag-over` on a `drop-target` lights up while a drag it takes is over
+  it, an in-app drag or a file dragged in from the desktop, and clears on a
+  drop, matching the desktop. `accept="..."`
   filters it the same way on both: a drag the target does not take leaves it
   dark, and the marker goes to the nearest ancestor that does take it. A file
   dragged in from the desktop offers `text/uri-list` and nothing else, so a
@@ -805,12 +806,14 @@ none of them means anything without an absolute address.
   browser can refuse a write that does not follow something the visitor did,
   such as a click, and it asks the visitor before a read; a refused read also
   answers with empty text. `copy_image` and `save_clipboard_image` are desktop only.
-- `on_file_dropped`, the in-app `drag-payload` / `on_drop` pair and the
-  drag events (`dragstart`, `dragenter`, `dragover`, `dragleave`, `drop`,
-  `dragend`), which read what was dropped, are desktop only:
-  `draggable="true"` has no effect in a browser, so an element cannot start a
-  drag there in the first place, and a drop on the web target delivers
-  nothing.
+- In-app drags work on a page: the browser runs the drag, an element with
+  `drag-payload` is draggable, and `dragstart`, `dragenter`, `dragover`,
+  `dragleave`, `drop`, `dragend`, `on_drag_start` and `on_drop` fire as on
+  the desktop, with the payload under its `drag-type`. What a `dragstart`
+  handler adds with `set_data` travels in the browser's drag. A file dragged
+  in from the desktop reaches `drop` and `on_drop` as `text/uri-list`, but a
+  browser never tells a page where a file lives, so each entry is `file://`
+  followed by the file's name alone. `on_file_dropped` is desktop only.
 - `request_pointer_lock` does nothing in a browser, so `pointerlockchange`
   never fires there and `pointer_lock_element()` stays empty. A pointer's
   `movement_x` and `movement_y`, and a wheel's `delta_mode`, are the

@@ -2591,3 +2591,179 @@ fn a_row_that_moved_up_keeps_its_path_apart_from_a_new_row() {
     assert_eq!(row_elements(&root)[1], before[2]);
     assert_rows_resolve(&mut app, &root);
 }
+
+/// A card that drags an `application/x-card` payload, beside a drop target
+/// taking `application/*`.
+fn in_app_drag_tree() -> LayoutIR {
+    let mut card = element("tile", None, vec![]);
+    card.attrs.id = Some("card-3".to_string());
+    card.attrs.drag_payload = Some(String::new());
+    card.attrs.drag_type = Some("application/x-card".to_string());
+    let mut bin = element("row", None, vec![]);
+    bin.attrs.drop_target = true;
+    bin.attrs.drop_accept = Some("application/*".to_string());
+    LayoutIR {
+        root: element("root", None, vec![card, bin]),
+        ..LayoutIR::default()
+    }
+}
+
+/// Dispatch a bubbling drag event of `kind` at `target` carrying `transfer`,
+/// answering whether a listener prevented its default.
+fn dispatch_transfer(target: &Element, kind: &str, transfer: &web_sys::DataTransfer) -> bool {
+    let init = web_sys::DragEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_data_transfer(Some(transfer));
+    let event = web_sys::DragEvent::new_with_event_init_dict(kind, &init).unwrap();
+    !target.dispatch_event(&event).unwrap()
+}
+
+#[wasm_bindgen_test]
+fn an_in_app_drag_drops_its_typed_payload_on_a_target_that_takes_it() {
+    let ir = in_app_drag_tree();
+    let root = prerender(ir.clone());
+    let mut app = App::new();
+    let root_entity = ir.spawn_into(&mut app.world);
+    app.add_plugin(WebDomPlugin {
+        root: root.clone(),
+        root_entity,
+        routes: Routes::default(),
+        navigation: Navigation::InPlace,
+    });
+    lumen_scene::dom::install_dom(&mut app);
+    app.tick();
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
+
+    let card = root.first_element_child().expect("the card");
+    let bin = card.next_element_sibling().expect("the drop target");
+    assert_eq!(card.get_attribute("draggable").as_deref(), Some("true"));
+
+    // A DOM `drop` listener on the target, the way any host binds one.
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let bin_entity = {
+        let path = bin.get_attribute(DATA_LM).expect("the target's path");
+        app.world
+            .non_send::<NodeTable>()
+            .entity_at(&path)
+            .expect("the target is bound")
+    };
+    let log = heard.clone();
+    let token = lumen_script::event::register_native_binding(
+        lumen_core::node::NodeHandle::new(bin_entity).pack(),
+        "drop".to_string(),
+        false,
+        std::sync::Arc::new(move || {
+            let mut log = log.lock().unwrap();
+            log.extend(lumen_script::event::event_types());
+            log.push(lumen_script::event::event_get_data("application/x-card"));
+        }),
+    );
+
+    let transfer = web_sys::DataTransfer::new().unwrap();
+    assert!(!dispatch_transfer(&card, "dragstart", &transfer));
+    assert_eq!(
+        transfer.get_data("application/x-card").unwrap(),
+        "card-3",
+        "the browser carries the payload under its kind"
+    );
+    app.tick();
+    assert!(
+        app.world.resource::<lumen_os_dnd::ActiveDrag>().0.is_some(),
+        "the page holds the drag session"
+    );
+
+    // A synthetic `DataTransfer` keeps `dropEffect` at "none" whatever a
+    // listener sets, so the acceptance shows on the marker instead.
+    dispatch_transfer(&bin, "dragenter", &transfer);
+    assert!(dispatch_transfer(&bin, "dragover", &transfer));
+    app.tick();
+    assert!(
+        bin.has_attribute(DATA_LM_DRAG_OVER),
+        "the target's `application/*` takes the card"
+    );
+
+    dispatch_transfer(&bin, "drop", &transfer);
+    app.tick();
+    assert_eq!(
+        *heard.lock().unwrap(),
+        ["application/x-card", "card-3"],
+        "the DOM drop reads the typed payload"
+    );
+
+    dispatch_transfer(&card, "dragend", &transfer);
+    app.tick();
+    assert!(app.world.resource::<lumen_os_dnd::ActiveDrag>().0.is_none());
+    lumen_script::event::unregister_binding(token);
+}
+
+/// A drag source the page builds rather than adopts is draggable too, and
+/// what a `dragstart` handler adds with `set_data` travels in the browser's
+/// drag when the app can run its handlers inside the browser's dispatch.
+#[wasm_bindgen_test]
+fn a_built_drag_source_carries_what_its_dragstart_handler_adds() {
+    let ir = in_app_drag_tree();
+    let document = web_sys::window().unwrap().document().unwrap();
+    let root = document.create_element("div").unwrap();
+    document.body().unwrap().append_child(&root).unwrap();
+    let mut app = App::new();
+    let root_entity = ir.spawn_into(&mut app.world);
+    app.add_plugin(WebDomPlugin {
+        root: root.clone(),
+        root_entity,
+        routes: Routes::default(),
+        navigation: Navigation::InPlace,
+    });
+    lumen_scene::dom::install_dom(&mut app);
+    app.tick();
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
+
+    let card = root.first_element_child().expect("the built card");
+    assert_eq!(card.get_attribute("draggable").as_deref(), Some("true"));
+    assert_eq!(
+        card.get_attribute(lumen_html::DATA_LM_DRAG),
+        None,
+        "a built source names no payload: the drag reads it off the app"
+    );
+    let card_entity = {
+        let path = card.get_attribute(DATA_LM).expect("the card's path");
+        app.world
+            .non_send::<NodeTable>()
+            .entity_at(&path)
+            .expect("the card is bound")
+    };
+    let token = lumen_script::event::register_native_binding(
+        lumen_core::node::NodeHandle::new(card_entity).pack(),
+        "dragstart".to_string(),
+        false,
+        std::sync::Arc::new(|| {
+            lumen_script::event::event_set_data("text/plain", "card three");
+        }),
+    );
+
+    let app = Rc::new(RefCell::new(app));
+    let ticker = app.clone();
+    lumen_web_dom::set_run_now(move || {
+        ticker
+            .try_borrow_mut()
+            .map(|mut app| {
+                app.tick();
+                true
+            })
+            .unwrap_or(false)
+    });
+    let transfer = web_sys::DataTransfer::new().unwrap();
+    assert!(!dispatch_transfer(&card, "dragstart", &transfer));
+    assert_eq!(
+        transfer.get_data("application/x-card").unwrap(),
+        "card-3",
+        "the source's own payload"
+    );
+    assert_eq!(
+        transfer.get_data("text/plain").unwrap(),
+        "card three",
+        "and what its handler added"
+    );
+    lumen_web_dom::set_run_now(|| false);
+    lumen_script::event::unregister_binding(token);
+}

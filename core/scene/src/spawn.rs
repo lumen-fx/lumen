@@ -464,7 +464,9 @@ pub fn renumber_document_order(
         return;
     }
     let mut top: Vec<(u32, Entity)> = roots.iter().map(|(e, d)| (d.0, e)).collect();
-    top.sort_unstable();
+    lumen_core::order::sort_by_rank(&mut top, |&(order, e)| {
+        lumen_core::order::rank_then_entity(order, e)
+    });
     // Depth-first with an explicit stack: an app can nest deeper than a
     // recursive walk is comfortable with.
     let mut stack: Vec<Entity> = top.into_iter().rev().map(|(_, e)| e).collect();

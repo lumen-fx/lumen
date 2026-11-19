@@ -35,6 +35,13 @@ fn sort_keys(keys: &mut [(u64, u32)]) {
     keys.sort_unstable();
 }
 
+/// The rank of an item ordered by `major` first and its entity after, as a
+/// `(major, entity)` tuple sorts: the entity's index breaks the tie, which
+/// is the order of two live entities.
+pub fn rank_then_entity(major: u32, entity: bevy_ecs::entity::Entity) -> u64 {
+    (u64::from(major) << 32) | u64::from(entity.index_u32())
+}
+
 /// A rank that orders floats as `<` does, with every NaN after them.
 pub fn float_rank(x: f32) -> u64 {
     let bits = x.to_bits();
